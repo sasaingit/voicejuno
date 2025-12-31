@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Builds
+/dist/
+
+# Logs and caches
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.eslintcache
+.cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+.env.local
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+#LLM instrucxtions
+.llm/
