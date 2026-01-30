@@ -22,6 +22,7 @@ function isWebAuthnSupported(): boolean {
 
 type StartResponse<T> = {
   options: T;
+  challengeId: string;
 };
 
 type FinishResponse = {
@@ -38,7 +39,7 @@ type FinishResponse = {
 function base64urlToArrayBuffer(b64url: string): ArrayBuffer {
   const pad = '==='.slice((b64url.length + 3) % 4);
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/') + pad;
-  const str = atob(b64);
+  const str = window.atob(b64);
   const bytes = new Uint8Array(str.length);
   for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
   return bytes.buffer;
@@ -73,32 +74,6 @@ function reviveRequestOptionsForGet(options: any) {
     }));
   }
   return options;
-}
-
-// Serialize credential response for sending to server
-function credentialToJSON(cred: any): any {
-  if (!cred) return cred;
-  if (cred instanceof ArrayBuffer) {
-    const bytes = new Uint8Array(cred);
-    let str = '';
-    for (let i = 0; i < bytes.byteLength; i++) str += String.fromCharCode(bytes[i]);
-    const b64 = btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-    return b64;
-  } else if (Array.isArray(cred)) {
-    return cred.map(credentialToJSON);
-  } else if (typeof cred === 'object') {
-    const obj: Record<string, any> = {};
-    for (const key in cred) {
-      // Some properties are getters; wrap in try
-      try {
-        obj[key] = credentialToJSON(cred[key]);
-      } catch {
-        // ignore non-enumerable getter failures
-      }
-    }
-    return obj;
-  }
-  return cred;
 }
 
 export function useAuth(): AuthState {
@@ -140,7 +115,8 @@ export function useAuth(): AuthState {
       headers: { 'Content-Type': 'application/json' },
     });
     if (!startRes.ok) throw new Error('Network error — please try again.');
-    const { options } = (await startRes.json()) as StartResponse<PublicKeyCredentialCreationOptions>;
+    const { options, challengeId } =
+      (await startRes.json()) as StartResponse<PublicKeyCredentialCreationOptions>;
 
     // Ensure binary fields are ArrayBuffers
     const publicKey = reviveRequestOptionsForCreate({ ...options });
@@ -162,11 +138,11 @@ export function useAuth(): AuthState {
     }
 
     // 3. finish
-    const attestation = credentialToJSON(credential);
+    const attestation = (credential as unknown as { toJSON: () => unknown }).toJSON();
     const finishRes = await fetch(`${EDGE_FUNCTIONS_BASE_URL}/auth-webauthn-register-finish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(attestation),
+      body: JSON.stringify({ credential: attestation, challengeId }),
     });
     if (!finishRes.ok) throw new Error('Network error — please try again.');
     const finishJson = (await finishRes.json()) as FinishResponse;
@@ -199,7 +175,8 @@ export function useAuth(): AuthState {
       headers: { 'Content-Type': 'application/json' },
     });
     if (!startRes.ok) throw new Error('Network error — please try again.');
-    const { options } = (await startRes.json()) as StartResponse<PublicKeyCredentialRequestOptions>;
+    const { options, challengeId } =
+      (await startRes.json()) as StartResponse<PublicKeyCredentialRequestOptions>;
 
     // 2. get assertion
     const publicKey = reviveRequestOptionsForGet({ ...options });
@@ -218,11 +195,11 @@ export function useAuth(): AuthState {
     }
 
     // 3. finish
-    const assertionJSON = credentialToJSON(assertion);
+    const assertionJSON = (assertion as unknown as { toJSON: () => unknown }).toJSON();
     const finishRes = await fetch(`${EDGE_FUNCTIONS_BASE_URL}/auth-webauthn-login-finish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(assertionJSON),
+      body: JSON.stringify({ credential: assertionJSON, challengeId }),
     });
     if (!finishRes.ok) throw new Error('Network error — please try again.');
     const finishJson = (await finishRes.json()) as FinishResponse;

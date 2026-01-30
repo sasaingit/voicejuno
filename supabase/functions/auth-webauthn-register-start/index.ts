@@ -1,158 +1,89 @@
-// @ts-nocheck
-// Supabase Edge Function: auth-webauthn-register-start
-// Step 3 — Register start endpoint per spec
-// Route: POST /auth/webauthn/register/start
+import { generateRegistrationOptions } from 'npm:@simplewebauthn/server@10.0.1';
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
-// Deno runtime (Supabase Edge Functions)
-// deno-lint-ignore-file no-explicit-any
-// eslint-disable-next-line
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
+import { bytesToBase64Url } from '../_shared/base64url.ts';
+import { getEnv } from '../_shared/env.ts';
+import {
+  assertOrigin,
+  assertPost,
+  errorResponse,
+  handlePreflight,
+  jsonResponse,
+} from '../_shared/http.ts';
+import { createAdminClient } from '../_shared/supabaseAdmin.ts';
 
-type Json = Record<string, any>;
+type WebauthnChallengeInsert = {
+  type: 'register';
+  challenge: string;
+  user_handle: string;
+  expires_at: string;
+};
 
-// Utility: base64url encode ArrayBuffer
-function base64url(bytes: Uint8Array): string {
-  // btoa expects binary string
-  const binString = Array.from(bytes)
-    .map((b) => String.fromCharCode(b))
-    .join('');
-  return btoa(binString).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+function expiresAtIso(minutesFromNow: number): string {
+  return new Date(Date.now() + minutesFromNow * 60_000).toISOString();
 }
 
-// Utility: generate secure random bytes
-function randomBytes(len = 32): Uint8Array {
-  const b = new Uint8Array(len);
-  crypto.getRandomValues(b);
-  return b;
-}
+async function handler(req: Request): Promise<Response> {
+  const env = getEnv();
+  const preflight = handlePreflight(req, env.WEBAUTHN_ORIGIN);
+  if (preflight) return preflight;
 
-// CORS headers helper
-function cors(origin: string | null): HeadersInit {
-  return {
-    'Access-Control-Allow-Origin': origin ?? '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'content-type',
-    'Access-Control-Max-Age': '86400',
-  };
-}
-
-// Read required env vars (set as Edge Function secrets in Supabase)
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
-const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-const WEBAUTHN_RP_ID = Deno.env.get('WEBAUTHN_RP_ID');
-const WEBAUTHN_RP_NAME = Deno.env.get('WEBAUTHN_RP_NAME');
-const WEBAUTHN_ORIGIN = Deno.env.get('WEBAUTHN_ORIGIN');
-
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !WEBAUTHN_RP_ID || !WEBAUTHN_RP_NAME || !WEBAUTHN_ORIGIN) {
-  console.error('Missing required environment variables for WebAuthn register start');
-}
-
-const supabase = createClient(SUPABASE_URL!, SERVICE_ROLE_KEY!, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-// Build PublicKeyCredentialCreationOptionsJSON per spec
-function buildRegistrationOptions(challenge: string, userIdB64u: string): Json {
-  return {
-    challenge,
-    rp: {
-      id: WEBAUTHN_RP_ID,
-      name: WEBAUTHN_RP_NAME,
-    },
-    user: {
-      id: userIdB64u, // base64url encoded user handle (bytes)
-      name: 'passkey-user',
-      displayName: 'Passkey User',
-    },
-    pubKeyCredParams: [
-      { type: 'public-key', alg: -7 }, // ES256
-    ],
-    authenticatorSelection: {
-      residentKey: 'required',
-      userVerification: 'required',
-    },
-    attestation: 'none',
-    timeout: 60_000,
-  };
-}
-
-// Persist challenge in DB and return its id
-async function storeChallenge(challenge: string, type: 'register' | 'login', userHandle?: string): Promise<string> {
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-  const payload: Record<string, any> = {
-    challenge,
-    type,
-    expires_at: expiresAt,
-  };
-  if (userHandle) payload.user_handle = userHandle;
-
-  const { data, error } = await supabase
-    .from('webauthn_challenges')
-    .insert(payload)
-    .select('id')
-    .single();
-
-  if (error) {
-    throw new Error(`DB insert failed: ${error.message}`);
-  }
-  return data.id as string;
-}
-
-function jsonResponse(body: Json, init?: ResponseInit & { origin?: string | null }) {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json; charset=utf-8',
-    ...cors(init?.origin ?? null),
-  };
-  const { origin, headers: _, ...rest } = (init as any) || {};
-  return new Response(JSON.stringify(body), { ...rest, headers });
-}
-
-function errorResponse(status: number, message: string, origin: string | null) {
-  return jsonResponse({ error: { message } }, { status, origin });
-}
-
-export default async function handler(req: Request): Promise<Response> {
-  const originHeader = req.headers.get('Origin');
-
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: cors(originHeader) });
-  }
-
-  if (req.method !== 'POST') {
-    return errorResponse(405, 'Method Not Allowed', originHeader);
-  }
-
-  // Enforce allowed origin
-  if (!originHeader || originHeader !== WEBAUTHN_ORIGIN) {
-    return errorResponse(403, 'Forbidden: invalid origin', originHeader);
-  }
-
-  // Validate env again at request time
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !WEBAUTHN_RP_ID || !WEBAUTHN_RP_NAME) {
-    return errorResponse(500, 'Server misconfiguration', originHeader);
+  let origin: string;
+  try {
+    assertPost(req);
+    origin = assertOrigin(req, env.WEBAUTHN_ORIGIN);
+  } catch (e) {
+    return errorResponse(
+      e instanceof Error && e.message === 'Method Not Allowed' ? 405 : 401,
+      e instanceof Error ? e.message : 'Unauthorized',
+      env.WEBAUTHN_ORIGIN,
+    );
   }
 
   try {
-    // 1) Generate challenge and user handle (bytes → base64url)
-    const challenge = base64url(randomBytes(32));
-    const userHandle = base64url(randomBytes(32));
+    // Passkey-only: we do not identify the user up-front.
+    // We still must provide a stable `user.id` for the registration ceremony.
+    const userHandleBytes = crypto.getRandomValues(new Uint8Array(32));
+    const userHandle = bytesToBase64Url(userHandleBytes);
 
-    // 2) Store challenge (type=register, expires in 5 minutes)
-    const challengeId = await storeChallenge(challenge, 'register', userHandle);
+    const options = await generateRegistrationOptions({
+      rpID: env.WEBAUTHN_RP_ID,
+      rpName: env.WEBAUTHN_RP_NAME,
+      userID: userHandleBytes,
+      userName: 'passkey',
+      attestationType: 'none',
+      authenticatorSelection: {
+        residentKey: 'required',
+        userVerification: 'required',
+      },
+      supportedAlgorithmIDs: [-7, -257], // ES256, RS256
+    });
 
-    // 3) Build registration options
-    const options = buildRegistrationOptions(challenge, userHandle);
+    const supabase = createAdminClient(env);
 
-    // 4) Respond
-    return jsonResponse({ options, challengeId }, { status: 200, origin: originHeader });
+    const insert: WebauthnChallengeInsert = {
+      type: 'register',
+      challenge: options.challenge,
+      user_handle: userHandle,
+      expires_at: expiresAtIso(5),
+    };
+
+    const { data, error } = await supabase
+      .from('webauthn_challenges')
+      .insert(insert)
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('Failed to store register challenge:', error);
+      return errorResponse(500, 'Failed to create challenge', origin);
+    }
+
+    return jsonResponse(200, { options, challengeId: data.id }, origin);
   } catch (e) {
     console.error('Register start error:', e);
-    return errorResponse(500, 'Internal Server Error', originHeader);
+    return errorResponse(500, 'Internal Server Error', origin);
   }
 }
 
-// Supabase Edge Functions require a default export
-// deno-lint-ignore no-unused-vars
-import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 serve(handler);

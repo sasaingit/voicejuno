@@ -1,202 +1,186 @@
-// @ts-nocheck
-// Supabase Edge Function: auth-webauthn-register-finish
-// Step 4 — Register finish endpoint per spec
-// Route: POST /auth/webauthn/register/finish
+import {
+  verifyRegistrationResponse,
+  type VerifiedRegistrationResponse,
+} from 'npm:@simplewebauthn/server@10.0.1';
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
-// Deno runtime (Supabase Edge Functions)
-// deno-lint-ignore-file no-explicit-any
-// eslint-disable-next-line
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
-import { verifyRegistrationResponse } from 'https://esm.sh/@simplewebauthn/server@11.0.0';
-import * as jose from 'https://deno.land/x/jose@v5.8.0/index.ts';
+import {
+  base64UrlToBytes,
+  bytesToBase64Url,
+  normalizeBase64Url,
+} from '../_shared/base64url.ts';
+import { getEnv } from '../_shared/env.ts';
+import {
+  assertOrigin,
+  assertPost,
+  errorResponse,
+  handlePreflight,
+  jsonResponse,
+} from '../_shared/http.ts';
+import { mintSupabaseJwt } from '../_shared/jwt.ts';
+import { createAdminClient } from '../_shared/supabaseAdmin.ts';
 
-type Json = Record<string, any>;
+type RegisterFinishBody = {
+  credential: unknown;
+  challengeId: string;
+};
 
-function base64url(bytes: Uint8Array): string {
-  const binString = Array.from(bytes)
-    .map((b) => String.fromCharCode(b))
-    .join('');
-  return btoa(binString).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+type WebauthnChallengeRow = {
+  id: string;
+  type: 'register' | 'login';
+  challenge: string;
+  user_handle: string | null;
+  expires_at: string;
+};
+
+type WebauthnCredentialInsert = {
+  user_id: string;
+  credential_id: string;
+  public_key: string;
+  counter: number;
+  transports: string[] | null;
+  last_used_at: string;
+};
+
+function isExpired(expiresAtIso: string): boolean {
+  return Date.parse(expiresAtIso) <= Date.now();
 }
 
-function fromBase64url(b64u: string): Uint8Array {
-  const b64 = b64u.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(b64u.length / 4) * 4, '=');
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
+async function handler(req: Request): Promise<Response> {
+  const env = getEnv();
+  const preflight = handlePreflight(req, env.WEBAUTHN_ORIGIN);
+  if (preflight) return preflight;
 
-function cors(origin: string | null): HeadersInit {
-  return {
-    'Access-Control-Allow-Origin': origin ?? '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'content-type',
-    'Access-Control-Max-Age': '86400',
-  };
-}
-
-const SUPABASE_URL = Deno.env.get('URL');
-const SERVICE_ROLE_KEY = Deno.env.get('SERVICE_ROLE_KEY');
-const JWT_SECRET = Deno.env.get('JWT_SECRET');
-const WEBAUTHN_RP_ID = Deno.env.get('WEBAUTHN_RP_ID');
-const WEBAUTHN_ORIGIN = Deno.env.get('WEBAUTHN_ORIGIN');
-
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !JWT_SECRET || !WEBAUTHN_RP_ID || !WEBAUTHN_ORIGIN) {
-  console.error('Missing required env variables for WebAuthn register finish');
-}
-
-const supabase = createClient(SUPABASE_URL!, SERVICE_ROLE_KEY!, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-function jsonResponse(body: Json, init?: ResponseInit & { origin?: string | null }) {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json; charset=utf-8',
-    ...cors(init?.origin ?? null),
-  };
-  const { origin, headers: _h, ...rest } = (init as any) || {};
-  return new Response(JSON.stringify(body), { ...rest, headers });
-}
-
-function errorResponse(status: number, message: string, origin: string | null) {
-  return jsonResponse({ error: { message } }, { status, origin });
-}
-
-async function loadChallenge(challengeId: string) {
-  const { data, error } = await supabase
-    .from('webauthn_challenges')
-    .select('*')
-    .eq('id', challengeId)
-    .single();
-  if (error) throw new Error(`Challenge load failed: ${error.message}`);
-  return data as any;
-}
-
-async function consumeChallenge(id: string) {
-  // Optional: delete or mark consumed to prevent replay
-  await supabase.from('webauthn_challenges').delete().eq('id', id);
-}
-
-async function createAuthUser(): Promise<string> {
-  // Create a new Supabase Auth user with a synthetic email
-  const syntheticId = crypto.randomUUID();
-  const email = `${syntheticId}@passkey.local`;
-  const { data, error } = await supabase.auth.admin.createUser({
-    email,
-    email_confirm: true,
-    user_metadata: { auth_method: 'passkey' },
-  });
-  if (error || !data?.user?.id) {
-    throw new Error(`Create user failed: ${error?.message || 'unknown'}`);
-  }
-  return data.user.id;
-}
-
-async function storeCredential(payload: Record<string, any>) {
-  const { error } = await supabase.from('webauthn_credentials').insert(payload);
-  if (error) throw new Error(`Credential insert failed: ${error.message}`);
-}
-
-async function mintJwt(userId: string): Promise<string> {
-  const key = new TextEncoder().encode(JWT_SECRET);
-  const jwt = await new jose.SignJWT({ role: 'authenticated' })
-    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
-    .setSubject(userId)
-    .setAudience('authenticated')
-    .setIssuer('edge-fn')
-    .setIssuedAt()
-    .setExpirationTime('1d')
-    .sign(key);
-  return jwt;
-}
-
-export default async function handler(req: Request): Promise<Response> {
-  const originHeader = req.headers.get('Origin');
-
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: cors(originHeader) });
-  }
-  if (req.method !== 'POST') {
-    return errorResponse(405, 'Method Not Allowed', originHeader);
-  }
-  if (!originHeader || originHeader !== WEBAUTHN_ORIGIN) {
-    return errorResponse(403, 'Forbidden: invalid origin', originHeader);
-  }
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !JWT_SECRET || !WEBAUTHN_RP_ID) {
-    return errorResponse(500, 'Server misconfiguration', originHeader);
+  let origin: string;
+  try {
+    assertPost(req);
+    origin = assertOrigin(req, env.WEBAUTHN_ORIGIN);
+  } catch (e) {
+    return errorResponse(
+      e instanceof Error && e.message === 'Method Not Allowed' ? 405 : 401,
+      e instanceof Error ? e.message : 'Unauthorized',
+      env.WEBAUTHN_ORIGIN,
+    );
   }
 
   try {
-    const body = await req.json().catch(() => ({}));
-    const credential = body?.credential;
-    const challengeId = body?.challengeId as string | undefined;
-    if (!credential || !challengeId) {
-      return errorResponse(400, 'Invalid body: expected { credential, challengeId }', originHeader);
+    const body = (await req.json()) as RegisterFinishBody;
+    if (!body?.challengeId || !body?.credential) {
+      return errorResponse(400, 'Missing credential or challengeId', origin);
     }
 
-    // 1) Load challenge and validate
-    const challengeRow = await loadChallenge(challengeId);
-    if (!challengeRow || challengeRow.type !== 'register') {
-      return errorResponse(400, 'Invalid challenge', originHeader);
+    const supabase = createAdminClient(env);
+
+    const { data: challengeRow, error: challengeError } = await supabase
+      .from('webauthn_challenges')
+      .select('id,type,challenge,user_handle,expires_at')
+      .eq('id', body.challengeId)
+      .single<WebauthnChallengeRow>();
+
+    if (challengeError || !challengeRow) {
+      return errorResponse(400, 'Invalid challenge', origin);
     }
-    const now = new Date();
-    const expiresAt = new Date(challengeRow.expires_at);
-    if (!(expiresAt.getTime() > now.getTime())) {
-      return errorResponse(400, 'Challenge expired', originHeader);
+    if (challengeRow.type !== 'register') {
+      return errorResponse(400, 'Challenge type mismatch', origin);
+    }
+    if (isExpired(challengeRow.expires_at)) {
+      return errorResponse(400, 'Challenge expired', origin);
+    }
+    if (!challengeRow.user_handle) {
+      return errorResponse(500, 'Challenge missing user handle', origin);
     }
 
-    // 2) Verify attestation
-    const verification = await verifyRegistrationResponse({
-      response: credential,
-      expectedChallenge: challengeRow.challenge,
-      expectedOrigin: WEBAUTHN_ORIGIN!,
-      expectedRPID: WEBAUTHN_RP_ID!,
-    });
+    const userHandleBytes = base64UrlToBytes(challengeRow.user_handle);
+
+    let verification: VerifiedRegistrationResponse;
+    try {
+      verification = await verifyRegistrationResponse({
+        response: body.credential as any,
+        expectedChallenge: challengeRow.challenge,
+        expectedOrigin: env.WEBAUTHN_ORIGIN,
+        expectedRPID: env.WEBAUTHN_RP_ID,
+        requireUserVerification: true,
+      });
+    } catch (e) {
+      console.error('Attestation verification failed:', e);
+      return errorResponse(400, 'Invalid credential', origin);
+    }
 
     if (!verification.verified || !verification.registrationInfo) {
-      return errorResponse(400, 'Attestation verification failed', originHeader);
+      return errorResponse(400, 'Invalid credential', origin);
     }
 
-    const { credentialID, credentialPublicKey, counter, aaguid, attestationObject, fmt } =
-      verification.registrationInfo as any;
+    const { credentialID, credentialPublicKey, counter } =
+      verification.registrationInfo;
 
-    // 3) Create Supabase Auth user
-    const userId = await createAuthUser();
+    const credentialIdFromClient = (body.credential as any)?.id;
+    const credentialIdFromVerification = bytesToBase64Url(
+      new Uint8Array(credentialID),
+    );
+    const credentialId =
+      typeof credentialIdFromClient === 'string' &&
+      credentialIdFromClient.trim().length > 0
+        ? normalizeBase64Url(credentialIdFromClient)
+        : credentialIdFromVerification;
 
-    // 4) Store credential
-    const transports: string[] | undefined = credential?.transports;
-    const payload = {
-      user_id: userId,
-      credential_id: typeof credentialID === 'string' ? credentialID : base64url(new Uint8Array(credentialID)),
-      public_key: base64url(new Uint8Array(credentialPublicKey)),
-      counter: counter ?? 0,
-      transports: transports ?? null,
-      aaguid: aaguid ? (typeof aaguid === 'string' ? aaguid : base64url(new Uint8Array(aaguid))) : null,
-      attestation_fmt: fmt ?? null,
-      created_at: new Date().toISOString(),
+    if (!credentialId || credentialId.length === 0) {
+      console.error('Registration succeeded but credential id is missing');
+      return errorResponse(500, 'Failed to extract credential id', origin);
+    }
+
+    const userEmail = `${crypto.randomUUID()}@passkey.local`;
+    const { data: created, error: createUserError } = await supabase.auth.admin
+      .createUser({
+        email: userEmail,
+        email_confirm: true,
+      });
+
+    if (createUserError || !created.user) {
+      console.error('Failed to create Supabase auth user:', createUserError);
+      return errorResponse(500, 'Failed to create user', origin);
+    }
+
+    const authUserId = created.user.id;
+
+    const credentialInsert: WebauthnCredentialInsert = {
+      user_id: authUserId,
+      credential_id: credentialId,
+      public_key: bytesToBase64Url(new Uint8Array(credentialPublicKey)),
+      counter,
+      transports: (body.credential as any)?.transports ?? null,
       last_used_at: new Date().toISOString(),
-    } as Record<string, any>;
+    };
 
-    await storeCredential(payload);
+    const { error: credError } = await supabase
+      .from('webauthn_credentials')
+      .insert(credentialInsert);
 
-    // Mark challenge consumed (best-effort)
-    consumeChallenge(challengeId).catch(() => {});
+    if (credError) {
+      console.error('Failed to store credential:', credError);
+      return errorResponse(500, 'Failed to store credential', origin);
+    }
 
-    // 5) Mint JWT compatible with Supabase
-    const access_token = await mintJwt(userId);
+    await supabase.from('webauthn_challenges').delete().eq('id', challengeRow.id);
+
+    const accessToken = await mintSupabaseJwt(env, {
+      sub: authUserId,
+      role: 'authenticated',
+      aud: 'authenticated',
+    });
 
     return jsonResponse(
-      { access_token, token_type: 'bearer', expires_in: 86400 },
-      { status: 200, origin: originHeader },
+      200,
+      {
+        access_token: accessToken,
+        token_type: 'bearer',
+        expires_in: 60 * 60 * 24,
+      },
+      origin,
     );
   } catch (e) {
     console.error('Register finish error:', e);
-    return errorResponse(500, 'Internal Server Error', originHeader);
+    return errorResponse(500, 'Internal Server Error', origin);
   }
 }
 
-// Supabase Edge Functions require a default export
-// deno-lint-ignore no-unused-vars
-import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 serve(handler);
