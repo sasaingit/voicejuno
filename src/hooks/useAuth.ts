@@ -147,21 +147,18 @@ export function useAuth(): AuthState {
     if (!finishRes.ok) throw new Error('Network error — please try again.');
     const finishJson = (await finishRes.json()) as FinishResponse;
 
-    // 4. set Supabase session if tokens returned
-    if (finishJson.access_token && finishJson.refresh_token) {
-      const { data, error } = await supabase.auth.setSession({
-        access_token: finishJson.access_token,
-        refresh_token: finishJson.refresh_token,
-      });
-      if (error) throw new Error(error.message || 'Network error — please try again.');
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-    } else {
-      // If backend set cookies directly, fetch session
-      const { data } = await supabase.auth.getSession();
-      setSession(data.session ?? null);
-      setUser(data.session?.user ?? null);
+    // 4. set Supabase session (Option A: tokens must be returned)
+    if (!finishJson.access_token || !finishJson.refresh_token) {
+      throw new Error('Registration succeeded but session tokens were not returned.');
     }
+
+    const { data, error } = await supabase.auth.setSession({
+      access_token: finishJson.access_token,
+      refresh_token: finishJson.refresh_token,
+    });
+    if (error) throw new Error(error.message || 'Network error — please try again.');
+    setSession(data.session);
+    setUser(data.session?.user ?? null);
   }, []);
 
   const signInWithPasskey = useCallback(async () => {
@@ -205,19 +202,17 @@ export function useAuth(): AuthState {
     const finishJson = (await finishRes.json()) as FinishResponse;
 
     // 4. set Supabase session
-    if (finishJson.access_token && finishJson.refresh_token) {
-      const { data, error } = await supabase.auth.setSession({
-        access_token: finishJson.access_token,
-        refresh_token: finishJson.refresh_token,
-      });
-      if (error) throw new Error(error.message || 'Network error — please try again.');
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-    } else {
-      const { data } = await supabase.auth.getSession();
-      setSession(data.session ?? null);
-      setUser(data.session?.user ?? null);
+    if (!finishJson.access_token || !finishJson.refresh_token) {
+      throw new Error('Login succeeded but session tokens were not returned.');
     }
+
+    const { data, error } = await supabase.auth.setSession({
+      access_token: finishJson.access_token,
+      refresh_token: finishJson.refresh_token,
+    });
+    if (error) throw new Error(error.message || 'Network error — please try again.');
+    setSession(data.session);
+    setUser(data.session?.user ?? null);
   }, []);
 
   const signOut = useCallback(async () => {

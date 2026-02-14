@@ -7,11 +7,6 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'register' | 'signin' | null>(null);
 
-  // Redirect if already logged in
-  if (!loading && session) {
-    return <Navigate to="/app" replace />;
-  }
-
   const isWebAuthnSupported = useMemo(() => {
     return (
       typeof window !== 'undefined' &&
@@ -48,6 +43,11 @@ export default function LoginPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  // Redirect if already logged in
+  if (!loading && session) {
+    return <Navigate to="/app" replace />;
   }
 
   return (

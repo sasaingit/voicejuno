@@ -17,7 +17,6 @@ import {
   handlePreflight,
   jsonResponse,
 } from '../_shared/http.ts';
-import { mintSupabaseJwt } from '../_shared/jwt.ts';
 import { createAdminClient } from '../_shared/supabaseAdmin.ts';
 
 type RegisterFinishBody = {
@@ -162,18 +161,35 @@ async function handler(req: Request): Promise<Response> {
 
     await supabase.from('webauthn_challenges').delete().eq('id', challengeRow.id);
 
-    const accessToken = await mintSupabaseJwt(env, {
-      sub: authUserId,
-      role: 'authenticated',
-      aud: 'authenticated',
+    // Create a real Supabase Auth session (access + refresh token) so the SPA can
+    // persist it to localStorage via supabase-js.
+    const { data: linkRes, error: linkErr } = await supabase.auth.admin.generateLink({
+      type: 'magiclink',
+      email: userEmail,
+      options: {
+        // Not actually used (we exchange server-side), but required by the API shape
+        redirectTo: env.WEBAUTHN_ORIGIN,
+      },
     });
+    if (linkErr || !linkRes?.properties?.hashed_token) {
+      console.error('Failed to generate link for session exchange:', linkErr);
+      return errorResponse(500, 'Failed to create session', origin);
+    }
+
+    const { data: verifyRes, error: verifyErr } = await supabase.auth.verifyOtp({
+      type: 'magiclink',
+      token_hash: linkRes.properties.hashed_token,
+    });
+    if (verifyErr || !verifyRes?.session?.access_token || !verifyRes?.session?.refresh_token) {
+      console.error('Failed to exchange token for session:', verifyErr);
+      return errorResponse(500, 'Failed to create session', origin);
+    }
 
     return jsonResponse(
       200,
       {
-        access_token: accessToken,
-        token_type: 'bearer',
-        expires_in: 60 * 60 * 24,
+        access_token: verifyRes.session.access_token,
+        refresh_token: verifyRes.session.refresh_token,
       },
       origin,
     );
