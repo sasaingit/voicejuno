@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../data/supabaseClient';
-import { EDGE_FUNCTIONS_BASE_URL } from '../config';
+import {
+  finishWebauthnLogin,
+  finishWebauthnRegister,
+  getTokensOrError,
+  startWebauthnLogin,
+  startWebauthnRegister,
+  type FinishResponse,
+} from '../data/webauthnAuthRepository';
 
 export type AuthState = {
   session: import('@supabase/supabase-js').Session | null;
@@ -11,6 +18,16 @@ export type AuthState = {
   signOut: () => Promise<void>;
 };
 
+const ERROR_MESSAGES = Object.freeze({
+  passkeysUnsupported: 'Passkeys are not supported in this browser. Please use Chrome.',
+  canceled: 'You canceled the request.',
+  passkeyAlreadyExists: 'A passkey already exists for this device. Try sign in.',
+  noPasskeyFound: 'No passkey found for this account.',
+  network: 'Network error — please try again.',
+  registrationTokensMissing: 'Registration succeeded but session tokens were not returned.',
+  loginTokensMissing: 'Login succeeded but session tokens were not returned.',
+});
+
 // Helper: WebAuthn support detection
 function isWebAuthnSupported(): boolean {
   return (
@@ -20,18 +37,14 @@ function isWebAuthnSupported(): boolean {
   );
 }
 
-type StartResponse<T> = {
-  options: T;
-  challengeId: string;
+type DomExceptionLike = {
+  name?: unknown;
+  message?: unknown;
 };
 
-type FinishResponse = {
-  // On success, backend returns a valid Supabase session access_token/refresh_token
-  // The easiest client-side path is to call supabase.auth.setSession with the returned tokens,
-  // but the Supabase Edge Function could also set auth cookies. We support token-based here.
-  access_token?: string;
-  refresh_token?: string;
-};
+function isDomExceptionLike(value: unknown): value is DomExceptionLike {
+  return typeof value === 'object' && value !== null;
+}
 
 // Convert arbitrary object properties that may be base64url strings back to ArrayBuffers
 // for WebAuthn API. We assume the backend sends options already correctly shaped per WebAuthn spec;
@@ -45,35 +58,68 @@ function base64urlToArrayBuffer(b64url: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function reviveRequestOptionsForCreate(options: any) {
+function reviveRequestOptionsForCreate(
+  options: PublicKeyCredentialCreationOptions
+): PublicKeyCredentialCreationOptions {
   // PublicKeyCredentialCreationOptions
-  if (options.challenge && typeof options.challenge === 'string') {
-    options.challenge = base64urlToArrayBuffer(options.challenge);
+  const revived: PublicKeyCredentialCreationOptions = { ...options };
+  const challenge = revived.challenge;
+
+  if (typeof challenge === 'string') {
+    revived.challenge = base64urlToArrayBuffer(challenge);
   }
-  if (options.user?.id && typeof options.user.id === 'string') {
-    options.user.id = base64urlToArrayBuffer(options.user.id);
+
+  const user = revived.user;
+  if (user && typeof user.id === 'string') {
+    revived.user = { ...user, id: base64urlToArrayBuffer(user.id) };
   }
-  if (Array.isArray(options.excludeCredentials)) {
-    options.excludeCredentials = options.excludeCredentials.map((cred: any) => ({
+
+  if (Array.isArray(revived.excludeCredentials)) {
+    revived.excludeCredentials = revived.excludeCredentials.map((cred) => ({
       ...cred,
       id: typeof cred.id === 'string' ? base64urlToArrayBuffer(cred.id) : cred.id,
     }));
   }
-  return options;
+  return revived;
 }
 
-function reviveRequestOptionsForGet(options: any) {
+function reviveRequestOptionsForGet(
+  options: PublicKeyCredentialRequestOptions
+): PublicKeyCredentialRequestOptions {
   // PublicKeyCredentialRequestOptions
-  if (options.challenge && typeof options.challenge === 'string') {
-    options.challenge = base64urlToArrayBuffer(options.challenge);
+  const revived: PublicKeyCredentialRequestOptions = { ...options };
+  const challenge = revived.challenge;
+  if (typeof challenge === 'string') {
+    revived.challenge = base64urlToArrayBuffer(challenge);
   }
-  if (Array.isArray(options.allowCredentials)) {
-    options.allowCredentials = options.allowCredentials.map((cred: any) => ({
+
+  if (Array.isArray(revived.allowCredentials)) {
+    revived.allowCredentials = revived.allowCredentials.map((cred) => ({
       ...cred,
       id: typeof cred.id === 'string' ? base64urlToArrayBuffer(cred.id) : cred.id,
     }));
   }
-  return options;
+  return revived;
+}
+
+function mapWebauthnError(e: unknown, context: 'register' | 'login'): Error {
+  if (isDomExceptionLike(e)) {
+    const name = typeof e.name === 'string' ? e.name : undefined;
+    if (name === 'AbortError' || name === 'NotAllowedError') {
+      return new Error(ERROR_MESSAGES.canceled);
+    }
+    if (context === 'register' && name === 'InvalidStateError') {
+      return new Error(ERROR_MESSAGES.passkeyAlreadyExists);
+    }
+    if (context === 'login' && (name === 'InvalidStateError' || name === 'NotFoundError')) {
+      return new Error(ERROR_MESSAGES.noPasskeyFound);
+    }
+
+    const message = typeof e.message === 'string' ? e.message : undefined;
+    return new Error(message || ERROR_MESSAGES.network);
+  }
+
+  return e instanceof Error ? e : new Error(ERROR_MESSAGES.network);
 }
 
 export function useAuth(): AuthState {
@@ -106,55 +152,41 @@ export function useAuth(): AuthState {
 
   const registerPasskey = useCallback(async () => {
     if (!isWebAuthnSupported()) {
-      throw new Error('Passkeys are not supported in this browser. Please use Chrome.');
+      throw new Error(ERROR_MESSAGES.passkeysUnsupported);
     }
 
     // 1. start
-    const startRes = await fetch(`${EDGE_FUNCTIONS_BASE_URL}/auth-webauthn-register-start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!startRes.ok) throw new Error('Network error — please try again.');
-    const { options, challengeId } =
-      (await startRes.json()) as StartResponse<PublicKeyCredentialCreationOptions>;
+    const startResult = await startWebauthnRegister();
+    if (startResult.error) throw startResult.error;
+    const { options, challengeId } = startResult.data;
 
     // Ensure binary fields are ArrayBuffers
-    const publicKey = reviveRequestOptionsForCreate({ ...options });
+    const publicKey = reviveRequestOptionsForCreate(options);
 
     // 2. create credential
     let credential: PublicKeyCredential;
     try {
       credential = (await navigator.credentials.create({ publicKey })) as PublicKeyCredential;
-      if (!credential) throw new Error('You canceled the request.');
-    } catch (e: any) {
-      // Map common DOMException names to friendly copy
-      if (e?.name === 'AbortError' || e?.name === 'NotAllowedError') {
-        throw new Error('You canceled the request.');
-      }
-      if (e?.name === 'InvalidStateError') {
-        throw new Error('A passkey already exists for this device. Try sign in.');
-      }
-      throw new Error(e?.message || 'Network error — please try again.');
+      if (!credential) throw new Error(ERROR_MESSAGES.canceled);
+    } catch (e) {
+      throw mapWebauthnError(e, 'register');
     }
 
     // 3. finish
     const attestation = (credential as unknown as { toJSON: () => unknown }).toJSON();
-    const finishRes = await fetch(`${EDGE_FUNCTIONS_BASE_URL}/auth-webauthn-register-finish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credential: attestation, challengeId }),
-    });
-    if (!finishRes.ok) throw new Error('Network error — please try again.');
-    const finishJson = (await finishRes.json()) as FinishResponse;
+    const finishResult = await finishWebauthnRegister({ credential: attestation, challengeId });
+    if (finishResult.error) throw finishResult.error;
+    const finishJson: FinishResponse = finishResult.data;
 
     // 4. set Supabase session (Option A: tokens must be returned)
-    if (!finishJson.access_token || !finishJson.refresh_token) {
-      throw new Error('Registration succeeded but session tokens were not returned.');
+    const tokensResult = getTokensOrError(finishJson);
+    if (tokensResult.error) {
+      throw new Error(ERROR_MESSAGES.registrationTokensMissing);
     }
 
     const { data, error } = await supabase.auth.setSession({
-      access_token: finishJson.access_token,
-      refresh_token: finishJson.refresh_token,
+      access_token: tokensResult.data.access_token,
+      refresh_token: tokensResult.data.refresh_token,
     });
     if (error) throw new Error(error.message || 'Network error — please try again.');
     setSession(data.session);
@@ -163,52 +195,39 @@ export function useAuth(): AuthState {
 
   const signInWithPasskey = useCallback(async () => {
     if (!isWebAuthnSupported()) {
-      throw new Error('Passkeys are not supported in this browser. Please use Chrome.');
+      throw new Error(ERROR_MESSAGES.passkeysUnsupported);
     }
 
     // 1. start
-    const startRes = await fetch(`${EDGE_FUNCTIONS_BASE_URL}/auth-webauthn-login-start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!startRes.ok) throw new Error('Network error — please try again.');
-    const { options, challengeId } =
-      (await startRes.json()) as StartResponse<PublicKeyCredentialRequestOptions>;
+    const startResult = await startWebauthnLogin();
+    if (startResult.error) throw startResult.error;
+    const { options, challengeId } = startResult.data;
 
     // 2. get assertion
-    const publicKey = reviveRequestOptionsForGet({ ...options });
+    const publicKey = reviveRequestOptionsForGet(options);
     let assertion: PublicKeyCredential;
     try {
       assertion = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential;
-      if (!assertion) throw new Error('You canceled the request.');
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.name === 'NotAllowedError') {
-        throw new Error('You canceled the request.');
-      }
-      if (e?.name === 'InvalidStateError' || e?.name === 'NotFoundError') {
-        throw new Error('No passkey found for this account.');
-      }
-      throw new Error(e?.message || 'Network error — please try again.');
+      if (!assertion) throw new Error(ERROR_MESSAGES.canceled);
+    } catch (e) {
+      throw mapWebauthnError(e, 'login');
     }
 
     // 3. finish
     const assertionJSON = (assertion as unknown as { toJSON: () => unknown }).toJSON();
-    const finishRes = await fetch(`${EDGE_FUNCTIONS_BASE_URL}/auth-webauthn-login-finish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credential: assertionJSON, challengeId }),
-    });
-    if (!finishRes.ok) throw new Error('Network error — please try again.');
-    const finishJson = (await finishRes.json()) as FinishResponse;
+    const finishResult = await finishWebauthnLogin({ credential: assertionJSON, challengeId });
+    if (finishResult.error) throw finishResult.error;
+    const finishJson: FinishResponse = finishResult.data;
 
     // 4. set Supabase session
-    if (!finishJson.access_token || !finishJson.refresh_token) {
-      throw new Error('Login succeeded but session tokens were not returned.');
+    const tokensResult = getTokensOrError(finishJson);
+    if (tokensResult.error) {
+      throw new Error(ERROR_MESSAGES.loginTokensMissing);
     }
 
     const { data, error } = await supabase.auth.setSession({
-      access_token: finishJson.access_token,
-      refresh_token: finishJson.refresh_token,
+      access_token: tokensResult.data.access_token,
+      refresh_token: tokensResult.data.refresh_token,
     });
     if (error) throw new Error(error.message || 'Network error — please try again.');
     setSession(data.session);
