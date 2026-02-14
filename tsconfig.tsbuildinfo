@@ -1,1 +1,0 @@
-{"root":["./src/config.ts","./src/main.tsx","./src/vite-env.d.ts","./src/app/app.tsx","./src/app/routes.tsx","./src/data/supabaseclient.ts","./src/hooks/useauth.ts","./src/pages/entriespage.tsx","./src/pages/landingpage.tsx","./src/pages/loginpage.tsx"],"version":"5.6.3"}
