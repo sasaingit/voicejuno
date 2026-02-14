@@ -26,5 +26,5 @@ yarn-error.log*
 .llm/
 
 supabase/.temp/
-/tsconfig.tsbuildinfo
-/tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo
+tsconfig.node.tsbuildinfo
