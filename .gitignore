@@ -16,12 +16,15 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
-.env.local
 
 # OS/editor
 .DS_Store
 .idea/
 .vscode/
 
-#LLM instrucxtions
+# LLM instructions
 .llm/
+
+supabase/.temp/
+/tsconfig.tsbuildinfo
+/tsconfig.node.tsbuildinfo
