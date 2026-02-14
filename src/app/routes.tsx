@@ -4,14 +4,15 @@ import LandingPage from '../pages/LandingPage';
 import EntriesPage from '../pages/EntriesPage';
 import AppHomePage from '../pages/AppHomePage';
 import RequireAuth from './RequireAuth';
+import { ROUTES } from './routes.constants';
 
 export const router = createBrowserRouter([
   {
-    path: '/login',
+    path: ROUTES.login,
     element: <LoginPage />,
   },
   {
-    path: '/app',
+    path: ROUTES.appHome,
     element: (
       <RequireAuth>
         <AppHomePage />
@@ -19,7 +20,7 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    path: '/app/entries',
+    path: ROUTES.entries,
     element: (
       <RequireAuth>
         <EntriesPage />
@@ -27,7 +28,7 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    path: '/',
+    path: ROUTES.landing,
     element: <LandingPage />,
   },
 ]);
