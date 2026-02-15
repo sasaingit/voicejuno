@@ -115,43 +115,32 @@ export default function AppHomePage() {
     <div className="container">
       <h1>App</h1>
 
-      <p style={{ color: 'var(--muted)', fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 12 }}>
         Logged in as <code>{user?.email ?? user?.id}</code>
       </p>
 
-      <nav style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      <nav className="appNav">
         <Link to={ROUTES.entries}>Entries</Link>
         <button type="button" onClick={() => void signOut()} disabled={isBusy}>
           Logout
         </button>
       </nav>
 
-      <div style={{ marginTop: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+      <div className="stackCenter">
         {uiState === 'RECORDING' ? <Timer seconds={elapsedSeconds} /> : null}
 
         <RecordButton state={recordButtonState} disabled={recordDisabled} onClick={() => void handleRecordToggle()} />
 
-        {uiState === 'SAVING' ? <div style={{ color: 'var(--muted)', fontSize: 14 }}>{COPY.saving}</div> : null}
+        {uiState === 'SAVING' ? <div className="muted" style={{ fontSize: 14 }}>{COPY.saving}</div> : null}
 
         {uiMessage ? (
-          <div
-            style={{
-              border: '1px solid #1f2937',
-              background: '#0b1220',
-              borderRadius: 12,
-              padding: 12,
-              color: 'var(--fg)',
-              fontSize: 14,
-              maxWidth: 520,
-              textAlign: 'center',
-            }}
-          >
+          <div className="notice">
             {uiMessage}
           </div>
         ) : null}
 
         {!speech.isSupported ? (
-          <div style={{ color: 'var(--muted)', fontSize: 14, maxWidth: 520, textAlign: 'center' }}>
+          <div className="muted" style={{ fontSize: 14, maxWidth: 520, textAlign: 'center' }}>
             {COPY.unsupportedSpeech}
           </div>
         ) : null}
@@ -164,15 +153,7 @@ export default function AppHomePage() {
 
         {uiState === 'ERROR' ? (
           <div style={{ width: '100%', marginTop: 12, display: 'grid', gap: 10 }}>
-            <div
-              style={{
-                border: '1px solid #7f1d1d',
-                background: '#1f0b0b',
-                borderRadius: 12,
-                padding: 12,
-                color: 'var(--fg)',
-              }}
-            >
+            <div className="noticeError">
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Something went wrong</div>
               <div style={{ color: 'var(--muted)', fontSize: 14 }}>{uiError ?? speech.errorMessage ?? 'Error'}</div>
             </div>
@@ -194,7 +175,7 @@ export default function AppHomePage() {
           </div>
         ) : null}
 
-        <div style={{ marginTop: 18, color: 'var(--muted)', fontSize: 12, maxWidth: 520, textAlign: 'center' }}>
+        <div className="muted" style={{ marginTop: 18, fontSize: 12, maxWidth: 520, textAlign: 'center' }}>
           {COPY.privacyNote}
         </div>
       </div>

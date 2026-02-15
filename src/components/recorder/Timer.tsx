@@ -6,8 +6,6 @@ type TimerProps = {
 
 export default function Timer({ seconds }: TimerProps) {
   return (
-    <div style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--muted)', fontSize: 14 }}>
-      {formatTimer(seconds)}
-    </div>
+    <div className="timer">{formatTimer(seconds)}</div>
   );
 }

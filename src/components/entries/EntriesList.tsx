@@ -9,7 +9,7 @@ type EntriesListProps = {
 
 export default function EntriesList({ entries, selectedEntryId, onSelectEntry }: EntriesListProps) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="entriesList">
       {entries.map((entry) => {
         const isSelected = entry.id === selectedEntryId;
 
@@ -19,16 +19,10 @@ export default function EntriesList({ entries, selectedEntryId, onSelectEntry }:
             type="button"
             onClick={() => onSelectEntry(entry)}
             aria-current={isSelected ? 'true' : undefined}
-            style={{
-              textAlign: 'left',
-              padding: 12,
-              borderRadius: 12,
-              border: '1px solid #374151',
-              background: isSelected ? '#111827' : '#0f172a',
-            }}
+            className="entryListItem"
           >
-            <div style={{ color: 'var(--muted)', fontSize: 12 }}>{formatEntryTimestamp(entry.recorded_at)}</div>
-            <div style={{ marginTop: 4, fontWeight: 600 }}>{entry.title}</div>
+            <div className="entryListMeta">{formatEntryTimestamp(entry.recorded_at)}</div>
+            <div className="entryListTitle">{entry.title}</div>
           </button>
         );
       })}
