@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import RecordButton from '../components/recorder/RecordButton';
 import Timer from '../components/recorder/Timer';
 import TranscriptView from '../components/recorder/TranscriptView';
+import { createEntry } from '../data/entries.api';
 import { useAuth } from '../hooks/useAuth';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { buildEntryTitle } from '../utils/title';
 
 type RecorderUiState = 'SIGNED_OUT' | 'IDLE' | 'RECORDING' | 'SAVING' | 'ERROR';
 
@@ -12,18 +14,13 @@ const COPY = Object.freeze({
   unsupportedSpeech: 'Speech recognition not supported in this browser. Please use Chrome.',
   saving: 'Saving…',
   privacyNote: 'Transcription is performed using your browser’s speech recognition service.',
+  emptyNotSaved: 'Nothing captured — entry not saved.',
+  saveFailed: 'Save failed — try again.',
 });
 
 const TIMING = Object.freeze({
-  stubSaveMs: 600,
   timerTickMs: 1000,
 });
-
-function buildStubSave(): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, TIMING.stubSaveMs);
-  });
-}
 
 export default function AppHomePage() {
   const { user, signOut } = useAuth();
@@ -32,6 +29,7 @@ export default function AppHomePage() {
   const [uiState, setUiState] = useState<RecorderUiState>(() => (user ? 'IDLE' : 'SIGNED_OUT'));
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [uiError, setUiError] = useState<string | null>(null);
+  const [uiMessage, setUiMessage] = useState<string | null>(null);
 
   const combinedTranscript = useMemo(
     () => `${speech.finalTranscript}${speech.interimTranscript}`.trim(),
@@ -69,17 +67,31 @@ export default function AppHomePage() {
   async function handleRecordToggle() {
     if (uiState === 'RECORDING') {
       setUiState('SAVING');
+
+      const transcript = `${speech.finalTranscript}${speech.interimTranscript}`.trim();
       speech.stop();
 
-      try {
-        await buildStubSave();
+      if (transcript.length === 0) {
         speech.reset();
         setElapsedSeconds(0);
         setUiError(null);
+        setUiMessage(COPY.emptyNotSaved);
+        setUiState('IDLE');
+        return;
+      }
+
+      try {
+        const recordedAt = new Date().toISOString();
+        const title = buildEntryTitle(recordedAt);
+        await createEntry({ title, transcript, recorded_at: recordedAt });
+        speech.reset();
+        setElapsedSeconds(0);
+        setUiError(null);
+        setUiMessage(null);
         setUiState('IDLE');
       } catch (e) {
-        setUiError(e instanceof Error ? e.message : 'Save failed — try again.');
-        setUiState('ERROR');
+        setUiMessage(e instanceof Error ? e.message : COPY.saveFailed);
+        setUiState('IDLE');
       }
       return;
     }
@@ -87,6 +99,7 @@ export default function AppHomePage() {
     if (uiState !== 'IDLE') return;
     setElapsedSeconds(0);
     setUiError(null);
+    setUiMessage(null);
     speech.reset();
     speech.start();
     setUiState('RECORDING');
@@ -96,6 +109,7 @@ export default function AppHomePage() {
     speech.reset();
     setElapsedSeconds(0);
     setUiError(null);
+    setUiMessage(null);
     setUiState(user ? 'IDLE' : 'SIGNED_OUT');
   }
 
@@ -120,6 +134,23 @@ export default function AppHomePage() {
         <RecordButton state={recordButtonState} disabled={recordDisabled} onClick={() => void handleRecordToggle()} />
 
         {uiState === 'SAVING' ? <div style={{ color: 'var(--muted)', fontSize: 14 }}>{COPY.saving}</div> : null}
+
+        {uiMessage ? (
+          <div
+            style={{
+              border: '1px solid #1f2937',
+              background: '#0b1220',
+              borderRadius: 12,
+              padding: 12,
+              color: 'var(--fg)',
+              fontSize: 14,
+              maxWidth: 520,
+              textAlign: 'center',
+            }}
+          >
+            {uiMessage}
+          </div>
+        ) : null}
 
         {!speech.isSupported ? (
           <div style={{ color: 'var(--muted)', fontSize: 14, maxWidth: 520, textAlign: 'center' }}>
