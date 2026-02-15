@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import RecordButton from '../components/recorder/RecordButton';
 import Timer from '../components/recorder/Timer';
 import TranscriptView from '../components/recorder/TranscriptView';
-import { createEntry } from '../data/entries.api';
 import { useAuth } from '../hooks/useAuth';
+import { useCreateEntry } from '../hooks/useEntries';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { buildEntryTitle } from '../utils/title';
 
@@ -22,19 +22,21 @@ const TIMING = Object.freeze({
   timerTickMs: 1000,
 });
 
+const ROUTES = Object.freeze({
+  entries: '/app/entries',
+});
+
 export default function AppHomePage() {
   const { user, signOut } = useAuth();
   const speech = useSpeechRecognition();
+  const createEntry = useCreateEntry();
 
   const [uiState, setUiState] = useState<RecorderUiState>(() => (user ? 'IDLE' : 'SIGNED_OUT'));
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [uiError, setUiError] = useState<string | null>(null);
   const [uiMessage, setUiMessage] = useState<string | null>(null);
 
-  const combinedTranscript = useMemo(
-    () => `${speech.finalTranscript}${speech.interimTranscript}`.trim(),
-    [speech.finalTranscript, speech.interimTranscript],
-  );
+  const combinedTranscript = `${speech.finalTranscript}${speech.interimTranscript}`.trim();
 
   useEffect(() => {
     setUiState(user ? 'IDLE' : 'SIGNED_OUT');
@@ -80,19 +82,15 @@ export default function AppHomePage() {
         return;
       }
 
-      try {
-        const recordedAt = new Date().toISOString();
-        const title = buildEntryTitle(recordedAt);
-        await createEntry({ title, transcript, recorded_at: recordedAt });
-        speech.reset();
-        setElapsedSeconds(0);
-        setUiError(null);
-        setUiMessage(null);
-        setUiState('IDLE');
-      } catch (e) {
-        setUiMessage(e instanceof Error ? e.message : COPY.saveFailed);
-        setUiState('IDLE');
-      }
+      const recordedAt = new Date().toISOString();
+      const title = buildEntryTitle(recordedAt);
+      const { error } = await createEntry.create({ title, transcript, recorded_at: recordedAt });
+
+      speech.reset();
+      setElapsedSeconds(0);
+      setUiError(null);
+      setUiMessage(error ? error.message : null);
+      setUiState('IDLE');
       return;
     }
 
@@ -122,8 +120,8 @@ export default function AppHomePage() {
       </p>
 
       <nav style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <Link to="/app/entries">Entries</Link>
-        <button onClick={() => void signOut()} disabled={isBusy}>
+        <Link to={ROUTES.entries}>Entries</Link>
+        <button type="button" onClick={() => void signOut()} disabled={isBusy}>
           Logout
         </button>
       </nav>

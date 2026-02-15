@@ -1,47 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import EntriesList from '../components/entries/EntriesList';
 import EntryEditor from '../components/entries/EntryEditor';
-import { listEntries } from '../data/entries.api';
-import type { Entry } from '../types/entry';
+import { useEntriesList } from '../hooks/useEntries';
+
+const ROUTES = Object.freeze({
+  app: '/app',
+});
 
 export default function EntriesPage() {
   const navigate = useNavigate();
-  const [entries, setEntries] = useState<Entry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { entries, status, errorMessage } = useEntriesList();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      setStatus('loading');
-      setErrorMessage(null);
-
-      try {
-        const data = await listEntries();
-        if (cancelled) return;
-        setEntries(data);
-        setStatus('success');
-      } catch (err) {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : 'Loading entries failed.';
-        setErrorMessage(message);
-        setStatus('error');
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const selectedEntry = useMemo(() => {
-    if (!selectedEntryId) return null;
-    return entries.find((e) => e.id === selectedEntryId) ?? null;
-  }, [entries, selectedEntryId]);
+  const selectedEntry = selectedEntryId ? (entries.find((entry) => entry.id === selectedEntryId) ?? null) : null;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -55,7 +27,7 @@ export default function EntriesPage() {
         }}
       >
         <h1 style={{ margin: 0, fontSize: '1.4rem' }}>Entries</h1>
-        <button type="button" onClick={() => navigate('/app')} aria-label="Close">
+        <button type="button" onClick={() => navigate(ROUTES.app)} aria-label="Close">
           X
         </button>
       </div>
@@ -73,7 +45,7 @@ export default function EntriesPage() {
         }}
       >
         <div style={{ overflow: 'auto', paddingRight: 4 }}>
-          {status === 'loading' ? (
+          {status === 'idle' || status === 'loading' ? (
             <div style={{ color: 'var(--muted)' }}>Loading…</div>
           ) : status === 'error' ? (
             <div style={{ color: 'var(--muted)' }}>{errorMessage ?? 'Loading entries failed.'}</div>
