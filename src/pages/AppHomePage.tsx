@@ -15,11 +15,13 @@ const COPY = Object.freeze({
   saving: 'Saving…',
   privacyNote: 'Transcription is performed using your browser’s speech recognition service.',
   emptyNotSaved: 'Nothing captured — entry not saved.',
+  saveSuccess: 'Saved.',
   saveFailed: 'Save failed — try again.',
 });
 
 const TIMING = Object.freeze({
   timerTickMs: 1000,
+  successMessageMs: 3000,
 });
 
 const ROUTES = Object.freeze({
@@ -35,6 +37,7 @@ export default function AppHomePage() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [uiError, setUiError] = useState<string | null>(null);
   const [uiMessage, setUiMessage] = useState<string | null>(null);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   const combinedTranscript = `${speech.finalTranscript}${speech.interimTranscript}`.trim();
 
@@ -62,6 +65,18 @@ export default function AppHomePage() {
     };
   }, [uiState]);
 
+  useEffect(() => {
+    if (!saveSuccessMessage) return;
+
+    const id = window.setTimeout(() => {
+      setSaveSuccessMessage(null);
+    }, TIMING.successMessageMs);
+
+    return () => {
+      window.clearTimeout(id);
+    };
+  }, [saveSuccessMessage]);
+
   const isBusy = uiState === 'SAVING';
   const recordButtonState = uiState === 'RECORDING' ? 'recording' : uiState === 'SAVING' ? 'saving' : 'idle';
   const recordDisabled = !speech.isSupported || isBusy || uiState === 'SIGNED_OUT' || uiState === 'ERROR';
@@ -78,6 +93,7 @@ export default function AppHomePage() {
         setElapsedSeconds(0);
         setUiError(null);
         setUiMessage(COPY.emptyNotSaved);
+        setSaveSuccessMessage(null);
         setUiState('IDLE');
         return;
       }
@@ -90,6 +106,7 @@ export default function AppHomePage() {
       setElapsedSeconds(0);
       setUiError(null);
       setUiMessage(error ? error.message : null);
+      setSaveSuccessMessage(error ? null : COPY.saveSuccess);
       setUiState('IDLE');
       return;
     }
@@ -98,6 +115,7 @@ export default function AppHomePage() {
     setElapsedSeconds(0);
     setUiError(null);
     setUiMessage(null);
+    setSaveSuccessMessage(null);
     speech.reset();
     speech.start();
     setUiState('RECORDING');
@@ -108,6 +126,7 @@ export default function AppHomePage() {
     setElapsedSeconds(0);
     setUiError(null);
     setUiMessage(null);
+    setSaveSuccessMessage(null);
     setUiState(user ? 'IDLE' : 'SIGNED_OUT');
   }
 
@@ -138,6 +157,8 @@ export default function AppHomePage() {
             {uiMessage}
           </div>
         ) : null}
+
+        {saveSuccessMessage ? <div className="notice">{saveSuccessMessage}</div> : null}
 
         {!speech.isSupported ? (
           <div className="muted" style={{ fontSize: 14, maxWidth: 520, textAlign: 'center' }}>
