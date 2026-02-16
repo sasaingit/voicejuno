@@ -15,13 +15,13 @@ export function corsHeaders(origin: string): Record<string, string> {
 export function jsonResponse(
   status: number,
   body: unknown,
-  origin: string,
+  origin?: string,
 ): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       ...COMMON_HEADERS,
-      ...corsHeaders(origin),
+      ...(origin ? corsHeaders(origin) : {}),
     },
   });
 }
@@ -29,7 +29,7 @@ export function jsonResponse(
 export function errorResponse(
   status: number,
   message: string,
-  origin: string,
+  origin?: string,
 ): Response {
   return jsonResponse(status, { error: message }, origin);
 }
@@ -38,15 +38,18 @@ export function getRequestOrigin(req: Request): string | null {
   return req.headers.get('origin');
 }
 
-export function handlePreflight(req: Request, allowedOrigin: string): Response | null {
+export function handlePreflight(
+  req: Request,
+  allowedOrigins: readonly string[],
+): Response | null {
   if (req.method !== 'OPTIONS') return null;
   const origin = getRequestOrigin(req);
-  if (!origin || origin !== allowedOrigin) {
+  if (!origin || !allowedOrigins.includes(origin)) {
     return new Response(null, { status: 204 });
   }
   return new Response(null, {
     status: 204,
-    headers: corsHeaders(allowedOrigin),
+    headers: corsHeaders(origin),
   });
 }
 
@@ -56,9 +59,18 @@ export function assertPost(req: Request): void {
   }
 }
 
-export function assertOrigin(req: Request, allowedOrigin: string): string {
+export function assertOrigin(req: Request, allowedOrigins: readonly string[]): string {
   const origin = getRequestOrigin(req);
   if (!origin) throw new Error('Missing Origin');
-  if (origin !== allowedOrigin) throw new Error('Invalid Origin');
+  if (!allowedOrigins.includes(origin)) throw new Error('Invalid Origin');
   return origin;
+}
+
+export function getCorsOriginIfAllowed(
+  req: Request,
+  allowedOrigins: readonly string[],
+): string | undefined {
+  const origin = getRequestOrigin(req);
+  if (!origin) return undefined;
+  return allowedOrigins.includes(origin) ? origin : undefined;
 }

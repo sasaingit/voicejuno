@@ -2,11 +2,12 @@ import { generateRegistrationOptions } from 'npm:@simplewebauthn/server@10.0.1';
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 import { bytesToBase64Url } from '../_shared/base64url.ts';
-import { getEnv } from '../_shared/env.ts';
+import { getAllowedOrigins, getEnv } from '../_shared/env.ts';
 import {
   assertOrigin,
   assertPost,
   errorResponse,
+  getCorsOriginIfAllowed,
   handlePreflight,
   jsonResponse,
 } from '../_shared/http.ts';
@@ -25,18 +26,20 @@ function expiresAtIso(minutesFromNow: number): string {
 
 async function handler(req: Request): Promise<Response> {
   const env = getEnv();
-  const preflight = handlePreflight(req, env.WEBAUTHN_ORIGIN);
+  const allowedOrigins = getAllowedOrigins(env);
+  const preflight = handlePreflight(req, allowedOrigins);
   if (preflight) return preflight;
 
   let origin: string;
   try {
     assertPost(req);
-    origin = assertOrigin(req, env.WEBAUTHN_ORIGIN);
+    origin = assertOrigin(req, allowedOrigins);
   } catch (e) {
+    const corsOrigin = getCorsOriginIfAllowed(req, allowedOrigins);
     return errorResponse(
       e instanceof Error && e.message === 'Method Not Allowed' ? 405 : 401,
       e instanceof Error ? e.message : 'Unauthorized',
-      env.WEBAUTHN_ORIGIN,
+      corsOrigin,
     );
   }
 
