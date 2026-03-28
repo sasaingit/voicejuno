@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import RecordButton from '../components/recorder/RecordButton';
 import Timer from '../components/recorder/Timer';
@@ -6,22 +6,12 @@ import TranscriptView from '../components/recorder/TranscriptView';
 import { useAuth } from '../hooks/useAuth';
 import { useCreateEntry } from '../hooks/useEntries';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
-import { buildEntryTitle } from '../utils/title';
-
-type RecorderUiState = 'SIGNED_OUT' | 'IDLE' | 'RECORDING' | 'SAVING' | 'ERROR';
+import { useHomeRecorder } from '../hooks/useHomeRecorder';
 
 const COPY = Object.freeze({
   unsupportedSpeech: 'Speech recognition not supported in this browser. Please use Chrome.',
   saving: 'Saving…',
   privacyNote: 'Transcription is performed using your browser’s speech recognition service.',
-  emptyNotSaved: 'Nothing captured — entry not saved.',
-  saveSuccess: 'Saved.',
-  saveFailed: 'Save failed — try again.',
-});
-
-const TIMING = Object.freeze({
-  timerTickMs: 1000,
-  successMessageMs: 3000,
 });
 
 const ROUTES = Object.freeze({
@@ -33,170 +23,85 @@ export default function AppHomePage() {
   const speech = useSpeechRecognition();
   const createEntry = useCreateEntry();
 
-  const [uiState, setUiState] = useState<RecorderUiState>(() => (user ? 'IDLE' : 'SIGNED_OUT'));
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [uiError, setUiError] = useState<string | null>(null);
-  const [uiMessage, setUiMessage] = useState<string | null>(null);
-  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const recorder = useHomeRecorder({ user, speech, createEntry });
 
-  const combinedTranscript = `${speech.finalTranscript}${speech.interimTranscript}`.trim();
-
-  useEffect(() => {
-    setUiState(user ? 'IDLE' : 'SIGNED_OUT');
-  }, [user]);
-
-  useEffect(() => {
-    if (uiState !== 'RECORDING') return;
-    if (speech.status !== 'error') return;
-
-    setUiError(speech.errorMessage ?? null);
-    setUiState('ERROR');
-  }, [speech.errorMessage, speech.status, uiState]);
-
-  useEffect(() => {
-    if (uiState !== 'RECORDING') return;
-
-    const id = window.setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, TIMING.timerTickMs);
-
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [uiState]);
-
-  useEffect(() => {
-    if (!saveSuccessMessage) return;
-
-    const id = window.setTimeout(() => {
-      setSaveSuccessMessage(null);
-    }, TIMING.successMessageMs);
-
-    return () => {
-      window.clearTimeout(id);
-    };
-  }, [saveSuccessMessage]);
-
-  const isBusy = uiState === 'SAVING';
-  const recordButtonState = uiState === 'RECORDING' ? 'recording' : uiState === 'SAVING' ? 'saving' : 'idle';
-  const recordDisabled = !speech.isSupported || isBusy || uiState === 'SIGNED_OUT' || uiState === 'ERROR';
-
-  async function handleRecordToggle() {
-    if (uiState === 'RECORDING') {
-      setUiState('SAVING');
-
-      const transcript = `${speech.finalTranscript}${speech.interimTranscript}`.trim();
-      speech.stop();
-
-      if (transcript.length === 0) {
-        speech.reset();
-        setElapsedSeconds(0);
-        setUiError(null);
-        setUiMessage(COPY.emptyNotSaved);
-        setSaveSuccessMessage(null);
-        setUiState('IDLE');
-        return;
-      }
-
-      const recordedAt = new Date().toISOString();
-      const title = buildEntryTitle(recordedAt);
-      const { error } = await createEntry.create({ title, transcript, recorded_at: recordedAt });
-
-      speech.reset();
-      setElapsedSeconds(0);
-      setUiError(null);
-      setUiMessage(error ? error.message : null);
-      setSaveSuccessMessage(error ? null : COPY.saveSuccess);
-      setUiState('IDLE');
-      return;
-    }
-
-    if (uiState !== 'IDLE') return;
-    setElapsedSeconds(0);
-    setUiError(null);
-    setUiMessage(null);
-    setSaveSuccessMessage(null);
-    speech.reset();
-    speech.start();
-    setUiState('RECORDING');
-  }
-
-  function handleRetry() {
-    speech.reset();
-    setElapsedSeconds(0);
-    setUiError(null);
-    setUiMessage(null);
-    setSaveSuccessMessage(null);
-    setUiState(user ? 'IDLE' : 'SIGNED_OUT');
-  }
+  const styles = useMemo(
+    () =>
+      ({
+        metaText: { fontSize: 12 },
+        savingText: { fontSize: 14 },
+        unsupported: { fontSize: 14, maxWidth: 520, textAlign: 'center' as const },
+        fullWidthSection: { width: '100%', marginTop: 12 },
+        errorPanel: { width: '100%', marginTop: 12, display: 'grid', gap: 10 },
+        errorTitle: { fontWeight: 600, marginBottom: 6 },
+        errorMessage: { color: 'var(--muted)', fontSize: 14 },
+        errorActions: { display: 'flex', justifyContent: 'center' },
+        privacyNote: { marginTop: 18, fontSize: 12, maxWidth: 520, textAlign: 'center' as const },
+      }) as const,
+    []
+  );
 
   return (
     <div className="container">
       <h1>App</h1>
 
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={styles.metaText}>
         Logged in as <code>{user?.email ?? user?.id}</code>
       </p>
 
       <nav className="appNav">
         <Link to={ROUTES.entries}>Entries</Link>
-        <button type="button" onClick={() => void signOut()} disabled={isBusy}>
+        <button type="button" onClick={() => void signOut()} disabled={recorder.isBusy}>
           Logout
         </button>
       </nav>
 
       <div className="stackCenter">
-        {uiState === 'RECORDING' ? <Timer seconds={elapsedSeconds} /> : null}
+        {recorder.recorderState === 'RECORDING' ? <Timer seconds={recorder.recordingSeconds} /> : null}
 
-        <RecordButton state={recordButtonState} disabled={recordDisabled} onClick={() => void handleRecordToggle()} />
+        <RecordButton
+          state={recorder.recordButtonState}
+          disabled={recorder.recordDisabled}
+          onClick={() => void recorder.handleRecordButtonClick()}
+        />
 
-        {uiState === 'SAVING' ? <div className="muted" style={{ fontSize: 14 }}>{COPY.saving}</div> : null}
-
-        {uiMessage ? (
-          <div className="notice">
-            {uiMessage}
+        {recorder.recorderState === 'SAVING' ? (
+          <div className="muted" style={styles.savingText}>
+            {COPY.saving}
           </div>
         ) : null}
 
-        {saveSuccessMessage ? <div className="notice">{saveSuccessMessage}</div> : null}
+        {recorder.notice ? (
+          <div className={recorder.notice.type === 'error' ? 'noticeError' : 'notice'}>{recorder.notice.message}</div>
+        ) : null}
 
         {!speech.isSupported ? (
-          <div className="muted" style={{ fontSize: 14, maxWidth: 520, textAlign: 'center' }}>
+          <div className="muted" style={styles.unsupported}>
             {COPY.unsupportedSpeech}
           </div>
         ) : null}
 
-        {uiState === 'RECORDING' ? (
-          <div style={{ width: '100%', marginTop: 12 }}>
-            <TranscriptView finalTranscript={speech.finalTranscript} interimTranscript={speech.interimTranscript} />
-          </div>
-        ) : null}
-
-        {uiState === 'ERROR' ? (
-          <div style={{ width: '100%', marginTop: 12, display: 'grid', gap: 10 }}>
+        {recorder.recorderState === 'ERROR' ? (
+          <div style={styles.errorPanel}>
             <div className="noticeError">
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Something went wrong</div>
-              <div style={{ color: 'var(--muted)', fontSize: 14 }}>{uiError ?? speech.errorMessage ?? 'Error'}</div>
+              <div style={styles.errorTitle}>Something went wrong</div>
+              <div style={styles.errorMessage}>{recorder.recorderErrorMessage ?? speech.errorMessage ?? 'Error'}</div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <button type="button" onClick={handleRetry}>
+            <div style={styles.errorActions}>
+              <button type="button" onClick={recorder.handleRetry}>
                 Try again
               </button>
             </div>
           </div>
         ) : null}
 
-        {uiState !== 'ERROR' &&
-        uiState !== 'SIGNED_OUT' &&
-        uiState !== 'SAVING' &&
-        uiState !== 'RECORDING' &&
-        combinedTranscript.length > 0 ? (
-          <div style={{ width: '100%', marginTop: 12 }}>
+        {recorder.shouldShowTranscript ? (
+          <div style={styles.fullWidthSection}>
             <TranscriptView finalTranscript={speech.finalTranscript} interimTranscript={speech.interimTranscript} />
           </div>
         ) : null}
 
-        <div className="muted" style={{ marginTop: 18, fontSize: 12, maxWidth: 520, textAlign: 'center' }}>
+        <div className="muted" style={styles.privacyNote}>
           {COPY.privacyNote}
         </div>
       </div>
