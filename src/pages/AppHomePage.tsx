@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import RecordButton from '../components/recorder/RecordButton';
 import Timer from '../components/recorder/Timer';
 import TranscriptView from '../components/recorder/TranscriptView';
 import { useAuth } from '../hooks/useAuth';
 import { useCreateEntry } from '../hooks/useEntries';
+import { useMyProfile } from '../hooks/useMyProfile';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { useHomeRecorder } from '../hooks/useHomeRecorder';
 
@@ -20,10 +21,19 @@ const ROUTES = Object.freeze({
 
 export default function AppHomePage() {
   const { user, signOut } = useAuth();
+  const profile = useMyProfile({ enabled: !!user });
   const speech = useSpeechRecognition();
   const createEntry = useCreateEntry();
 
   const recorder = useHomeRecorder({ user, speech, createEntry });
+
+  const handleSignOut = useCallback(async () => {
+    await signOut();
+  }, [signOut]);
+
+  const handleRecord = useCallback(async () => {
+    await recorder.handleRecordButtonClick();
+  }, [recorder.handleRecordButtonClick]);
 
   const styles = useMemo(
     () =>
@@ -46,12 +56,18 @@ export default function AppHomePage() {
       <h1>App</h1>
 
       <p className="muted" style={styles.metaText}>
-        Logged in as <code>{user?.email ?? user?.id}</code>
+        Logged in as <code>{profile.status === 'success' ? profile.profile.handle : user?.email ?? user?.id}</code>
       </p>
+
+      {profile.status === 'error' ? (
+        <p className="muted" style={styles.metaText}>
+          {profile.message}
+        </p>
+      ) : null}
 
       <nav className="appNav">
         <Link to={ROUTES.entries}>Entries</Link>
-        <button type="button" onClick={() => void signOut()} disabled={recorder.isBusy}>
+        <button type="button" onClick={handleSignOut} disabled={recorder.isBusy}>
           Logout
         </button>
       </nav>
@@ -62,7 +78,7 @@ export default function AppHomePage() {
         <RecordButton
           state={recorder.recordButtonState}
           disabled={recorder.recordDisabled}
-          onClick={() => void recorder.handleRecordButtonClick()}
+          onClick={handleRecord}
         />
 
         {recorder.recorderState === 'SAVING' ? (

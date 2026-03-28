@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import EntriesList from '../components/entries/EntriesList';
 import EntryEditor from '../components/entries/EntryEditor';
 import { useEntriesList } from '../hooks/useEntries';
+import type { Entry } from '../types/entry';
 
 const ROUTES = Object.freeze({
   app: '/app',
@@ -15,11 +16,19 @@ export default function EntriesPage() {
 
   const selectedEntry = selectedEntryId ? (entries.find((entry) => entry.id === selectedEntryId) ?? null) : null;
 
+  const handleClose = useCallback(() => {
+    navigate(ROUTES.app);
+  }, [navigate]);
+
+  const handleSelectEntry = useCallback((entry: Entry) => {
+    setSelectedEntryId(entry.id);
+  }, []);
+
   return (
     <div className="entriesPage">
       <div className="entriesHeader">
         <h1 style={{ margin: 0, fontSize: '1.4rem' }}>Entries</h1>
-        <button type="button" onClick={() => navigate(ROUTES.app)} aria-label="Close">
+        <button type="button" onClick={handleClose} aria-label="Close">
           X
         </button>
       </div>
@@ -36,7 +45,7 @@ export default function EntriesPage() {
             <EntriesList
               entries={entries}
               selectedEntryId={selectedEntryId}
-              onSelectEntry={(entry) => setSelectedEntryId(entry.id)}
+              onSelectEntry={handleSelectEntry}
             />
           )}
         </div>

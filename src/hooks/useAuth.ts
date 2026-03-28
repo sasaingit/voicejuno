@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../data/supabaseClient';
 import {
   finishWebauthnLogin,
@@ -10,8 +11,8 @@ import {
 } from '../data/webauthnAuthRepository';
 
 export type AuthState = {
-  session: import('@supabase/supabase-js').Session | null;
-  user: import('@supabase/supabase-js').User | null;
+  session: Session | null;
+  user: User | null;
   loading: boolean;
   signInWithPasskey: () => Promise<void>;
   registerPasskey: () => Promise<void>;
@@ -123,20 +124,23 @@ function mapWebauthnError(e: unknown, context: 'register' | 'login'): Error {
 }
 
 export function useAuth(): AuthState {
-  const [session, setSession] = useState<import('@supabase/supabase-js').Session | null>(null);
-  const [user, setUser] = useState<import('@supabase/supabase-js').User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const unsubRef = useRef<() => void>();
 
   useEffect(() => {
     let active = true;
-    // Get current session
-    supabase.auth.getSession().then(({ data }) => {
+
+    async function initSession() {
+      const { data } = await supabase.auth.getSession();
       if (!active) return;
       setSession(data.session ?? null);
       setUser(data.session?.user ?? null);
       setLoading(false);
-    });
+    }
+
+    void initSession();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);

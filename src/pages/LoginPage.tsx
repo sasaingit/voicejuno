@@ -1,19 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+
+function isWebAuthnAvailable(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    !!window.PublicKeyCredential &&
+    typeof window.PublicKeyCredential === 'function'
+  );
+}
 
 export default function LoginPage() {
   const { session, loading, registerPasskey, signInWithPasskey } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'register' | 'signin' | null>(null);
 
-  const isWebAuthnSupported = useMemo(() => {
-    return (
-      typeof window !== 'undefined' &&
-      !!(window as any).PublicKeyCredential &&
-      typeof (window as any).PublicKeyCredential === 'function'
-    );
-  }, []);
+  const isWebAuthnSupported = useMemo(() => isWebAuthnAvailable(), []);
 
   useEffect(() => {
     if (!isWebAuthnSupported) {
@@ -21,29 +23,31 @@ export default function LoginPage() {
     }
   }, [isWebAuthnSupported]);
 
-  async function onRegister() {
+  const onRegister = useCallback(async () => {
     setError(null);
     setBusy('register');
     try {
       await registerPasskey();
-    } catch (e: any) {
-      setError(e?.message || 'Network error — please try again.');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Network error — please try again.';
+      setError(message);
     } finally {
       setBusy(null);
     }
-  }
+  }, [registerPasskey]);
 
-  async function onSignin() {
+  const onSignin = useCallback(async () => {
     setError(null);
     setBusy('signin');
     try {
       await signInWithPasskey();
-    } catch (e: any) {
-      setError(e?.message || 'Network error — please try again.');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Network error — please try again.';
+      setError(message);
     } finally {
       setBusy(null);
     }
-  }
+  }, [signInWithPasskey]);
 
   // Redirect if already logged in
   if (!loading && session) {
