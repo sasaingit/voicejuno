@@ -22,9 +22,6 @@ yarn-error.log*
 .idea/
 .vscode/
 
-# LLM instructions
-.llm/
-
 supabase/.temp/
 tsconfig.tsbuildinfo
 tsconfig.node.tsbuildinfo
