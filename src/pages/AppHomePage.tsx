@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import LinkDevice from '../components/account/LinkDevice';
 import RecordButton from '../components/recorder/RecordButton';
 import Timer from '../components/recorder/Timer';
 import TranscriptView from '../components/recorder/TranscriptView';
@@ -119,6 +120,10 @@ export default function AppHomePage() {
 
         <div className="muted" style={styles.privacyNote}>
           {COPY.privacyNote}
+        </div>
+
+        <div style={styles.fullWidthSection}>
+          <LinkDevice />
         </div>
       </div>
     </div>

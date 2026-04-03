@@ -1,8 +1,10 @@
 # Code Structure — Voice Journaling (voicejuno)
 
-A React + TypeScript voice journaling app powered by Supabase (database, auth, edge functions) and the Web Speech API. Users authenticate with WebAuthn passkeys and record voice entries that are transcribed locally in the browser.
+A React + TypeScript voice journaling app powered by Supabase (database, auth, edge functions) and the Web Speech API. Users authenticate with WebAuthn passkeys, record voice entries transcribed locally in the browser, and can link multiple devices to a shared account via 6-digit codes.
 
 **Stack:** React 18, React Router 6, TypeScript 5, Vite 5, Supabase (PostgreSQL + Auth + Edge Functions), Deno (edge functions), Web Speech API
+
+**Identity model:** Each person is an `account`. Each passkey creates an `auth.users` record (device identity) mapped to one account via `account_users`. App data is scoped to the account, not the auth user.
 
 ---
 
@@ -22,6 +24,8 @@ voicejuno/
 │   │   ├── AppHomePage.tsx
 │   │   └── EntriesPage.tsx
 │   ├── components/                  # Reusable UI components
+│   │   ├── account/
+│   │   │   └── LinkDevice.tsx
 │   │   ├── entries/
 │   │   │   ├── EntriesList.tsx
 │   │   │   └── EntryEditor.tsx
@@ -33,16 +37,17 @@ voicejuno/
 │   │   ├── useAuth.ts
 │   │   ├── useEntries.ts
 │   │   ├── useHomeRecorder.ts
-│   │   ├── useMyProfile.ts
+│   │   ├── useMyAccount.ts
 │   │   └── useSpeechRecognition.ts
 │   ├── data/                        # API & infrastructure layer
 │   │   ├── supabaseClient.ts
+│   │   ├── accounts.api.ts
+│   │   ├── accountLink.api.ts
 │   │   ├── entries.api.ts
-│   │   ├── profiles.api.ts
 │   │   └── webauthnAuthRepository.ts
 │   ├── types/                       # Domain types
-│   │   ├── entry.ts
-│   │   └── profile.ts
+│   │   ├── account.ts
+│   │   └── entry.ts
 │   ├── utils/                       # Pure utility functions
 │   │   ├── time.ts
 │   │   └── title.ts
@@ -62,7 +67,9 @@ voicejuno/
 │       ├── auth-webauthn-register-start/
 │       ├── auth-webauthn-register-finish/
 │       ├── auth-webauthn-login-start/
-│       └── auth-webauthn-login-finish/
+│       ├── auth-webauthn-login-finish/
+│       ├── account-link-start/
+│       └── account-link-finish/
 ├── docs/
 ├── .llm/                            # Coding guidelines for AI agents
 │   └── skills/
@@ -88,13 +95,14 @@ voicejuno/
 |------|---------------|-------------|
 | `LandingPage.tsx` | Public landing page with nav links to login/entries | `LandingPage` component |
 | `LoginPage.tsx` | WebAuthn registration & login UI; checks browser support; redirects to `/app` on success | `LoginPage` component |
-| `AppHomePage.tsx` | Main recording interface; wires together `useAuth`, `useMyProfile`, `useSpeechRecognition`, `useCreateEntry`, and `useHomeRecorder` | `AppHomePage` component |
+| `AppHomePage.tsx` | Main recording interface; wires together `useAuth`, `useMyAccount`, `useSpeechRecognition`, `useCreateEntry`, `useHomeRecorder`, and `LinkDevice` | `AppHomePage` component |
 | `EntriesPage.tsx` | Two-pane layout — entry list (left) + entry detail (right); manages `selectedEntryId` state | `EntriesPage` component |
 
 ### Components (`src/components/`)
 
 | File | Responsibility | Props |
 |------|---------------|-------|
+| `LinkDevice.tsx` | Account linking UI with two modes: issuer (generates 6-digit code with countdown) and redeemer (6-digit input to join existing account) | `onLinked?` callback |
 | `RecordButton.tsx` | 220px circular record button with state-driven styling (idle/recording/saving) | `state`, `disabled?`, `onClick` |
 | `Timer.tsx` | Displays recording duration as `MM:SS` | `seconds` |
 | `TranscriptView.tsx` | Shows combined final + interim transcript with placeholder when empty | `finalTranscript`, `interimTranscript` |
@@ -105,11 +113,11 @@ voicejuno/
 
 | File | Responsibility | Key Exports |
 |------|---------------|-------------|
-| `useAuth.ts` | Manages Supabase session state; orchestrates WebAuthn register/login ceremonies; subscribes to `onAuthStateChange` | `useAuth()` returning `{ session, user, loading, signInWithPasskey, registerPasskey, signOut }` |
+| `useAuth.ts` | Manages Supabase session state; orchestrates WebAuthn register/login ceremonies with AbortController; subscribes to `onAuthStateChange` | `useAuth()` returning `{ session, user, loading, signInWithPasskey, registerPasskey, signOut }` |
 | `useEntries.ts` | Provides two hooks: one for fetching entry list, one for creating entries | `useEntriesList()` returning `{ entries, status, errorMessage, reload }`; `useCreateEntry()` returning `{ status, errorMessage, create }` |
 | `useSpeechRecognition.ts` | Wraps Web Speech API; manages `finalTranscript` and `interimTranscript`; maps browser error codes to readable messages; language: `en-AU` | `useSpeechRecognition()` returning `{ isSupported, status, finalTranscript, interimTranscript, errorMessage, start, stop, reset }` |
 | `useHomeRecorder.ts` | State machine orchestrating the recording flow (IDLE -> RECORDING -> SAVING -> IDLE); manages timer, notices, and error states | `useHomeRecorder(...)` returning `{ recorderState, recordingSeconds, recorderErrorMessage, notice, isBusy, recordButtonState, recordDisabled, shouldShowTranscript, combinedTranscript, handleRecordButtonClick, handleRetry }` |
-| `useMyProfile.ts` | Fetches authenticated user's profile; accepts `{ enabled }` flag | `useMyProfile(options)` returning `{ status, profile?, message? }` |
+| `useMyAccount.ts` | Fetches authenticated user's account (via `accounts` table + RLS); accepts `{ enabled }` flag | `useMyAccount(options)` returning `{ status, account?, message? }` |
 
 ### Data Layer (`src/data/`)
 
@@ -118,16 +126,17 @@ All API functions return `Result<T>` = `{ data: T; error: null } | { data: null;
 | File | Responsibility | Key Exports |
 |------|---------------|-------------|
 | `supabaseClient.ts` | Initializes Supabase client singleton; validates env vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`); enforces HTTPS in production | `supabase` |
-| `entries.api.ts` | Entry CRUD operations with input validation | `listEntries()`, `createEntry(input)`, `updateEntry(id, patch)`, `deleteEntry(id)` |
-| `profiles.api.ts` | Fetches authenticated user's profile | `fetchMyProfile()` |
+| `accounts.api.ts` | Fetches authenticated user's account | `fetchMyAccount()` |
+| `accountLink.api.ts` | Account linking API — generates and redeems 6-digit codes via edge functions | `startAccountLink()`, `finishAccountLink(code)` |
+| `entries.api.ts` | Entry CRUD operations with input validation; account_id auto-fills via DB default | `listEntries()`, `createEntry(input)`, `updateEntry(id, patch)`, `deleteEntry(id)` |
 | `webauthnAuthRepository.ts` | Calls WebAuthn edge function endpoints; extracts tokens from responses | `startWebauthnRegister()`, `finishWebauthnRegister(credential, challengeId)`, `startWebauthnLogin()`, `finishWebauthnLogin(credential, challengeId)`, `getTokensOrError(response)` |
 
 ### Types (`src/types/`)
 
 | File | Types |
 |------|-------|
-| `entry.ts` | `Entry` (full row), `EntryCreate` (title, transcript, recorded_at), `EntryPatch` (partial update) |
-| `profile.ts` | `Profile` (id, handle) |
+| `account.ts` | `Account` (id, handle) |
+| `entry.ts` | `Entry` (id, account_id, created_by_user_id, title, transcript, recorded_at, created_at, updated_at), `EntryCreate` (title, transcript, recorded_at), `EntryPatch` (partial update) |
 
 ### Utilities (`src/utils/`)
 
@@ -163,18 +172,27 @@ All API functions return `Result<T>` = `{ data: T; error: null } | { data: null;
 | Function | Method | Purpose |
 |----------|--------|---------|
 | `auth-webauthn-register-start` | POST | Generates registration options + stores challenge in DB (5min expiry) |
-| `auth-webauthn-register-finish` | POST | Verifies credential attestation, creates auth user, stores credential, returns session tokens |
+| `auth-webauthn-register-finish` | POST | Verifies credential attestation, creates auth user, creates account + account_users, stores credential, returns session tokens |
 | `auth-webauthn-login-start` | POST | Generates authentication options + stores challenge in DB (5min expiry) |
 | `auth-webauthn-login-finish` | POST | Verifies assertion against stored credential, updates counter, returns session tokens |
 
-### Database Tables Used
+### Account Linking Endpoints
+
+| Function | Method | Purpose |
+|----------|--------|---------|
+| `account-link-start` | POST | Authenticated. Generates 6-digit code, SHA-256 hashes it, stores in `account_link_codes` with 5min expiry. Returns plaintext code. |
+| `account-link-finish` | POST | Authenticated. Accepts `{ code }`. Verifies code hash, merges redeemer's entries into issuer's account, moves redeemer to issuer's account, deletes old account, marks code redeemed. |
+
+### Database Tables
 
 | Table | Purpose |
 |-------|---------|
-| `entries` | Stores journal entries (id, user_id, title, transcript, recorded_at, created_at, updated_at) |
-| `profiles` | User profiles (id, handle) |
-| `webauthn_challenges` | Temporary challenge storage for WebAuthn ceremonies (deleted after use, 5min TTL) |
-| `webauthn_credentials` | Stored passkey credentials (user_id, credential_id, public_key, counter, transports, last_used_at) |
+| `accounts` | Shared person-level identity (id, handle) |
+| `account_users` | Maps auth.users (device identities) to accounts. UNIQUE(user_id) enforces one account per user. |
+| `account_link_codes` | Temporary 6-digit link codes (SHA-256 hashed, 5min TTL, one-time use) |
+| `entries` | Journal entries scoped to account (account_id + created_by_user_id for audit) |
+| `webauthn_challenges` | Temporary WebAuthn challenge storage (deleted after use, 5min TTL) |
+| `webauthn_credentials` | Stored passkey credentials scoped to auth.users (device-level) |
 
 ---
 
@@ -197,6 +215,7 @@ LoginPage → useAuth.registerPasskey()
   ├─ [3] POST auth-webauthn-register-finish
   │       → Verifies attestation against stored challenge
   │       → Creates user in auth.users
+  │       → Creates account + account_users (with generated handle)
   │       → Stores credential in webauthn_credentials
   │       → Deletes challenge
   │       → Generates magic link → verifyOtp
@@ -239,7 +258,7 @@ LoginPage → useAuth.signInWithPasskey()
 AppHomePage
   │
   ├─ useAuth() ─────────── provides user/session
-  ├─ useMyProfile() ────── fetches user handle
+  ├─ useMyAccount() ────── fetches account handle
   ├─ useSpeechRecognition() ─── wraps Web Speech API
   ├─ useCreateEntry() ──── provides entry save function
   │
@@ -258,6 +277,8 @@ AppHomePage
        │   → Validate transcript is non-empty
        │   → createEntry({ title, transcript, recorded_at })
        │   → supabase.from('entries').insert(...)
+       │   → account_id auto-fills via my_account_id() DB default
+       │   → created_by_user_id auto-fills via auth.uid() DB default
        │   → Show success notice (auto-hides after 3s)
        │   → State returns to IDLE
        │
@@ -273,6 +294,7 @@ EntriesPage
   ├─ useEntriesList()
   │   → entries.api.listEntries()
   │   → supabase.from('entries').select().order('recorded_at', desc).limit(100)
+  │   → RLS filters to entries matching caller's account
   │   ← Returns Entry[]
   │
   ├─ [Left Pane] EntriesList
@@ -281,6 +303,32 @@ EntriesPage
   │
   └─ [Right Pane] EntryEditor
       → Displays selected entry detail (timestamp, title, full transcript)
+```
+
+### 5. Account Linking Flow
+
+```
+Device A (issuer) — AppHomePage → LinkDevice
+  │
+  ├─ [1] Click "Link another device"
+  │       → POST account-link-start (with Bearer token)
+  │       → Generates 6-digit code, hashes it, stores in account_link_codes (5min expiry)
+  │       ← Returns { code: "123456" }
+  │       → Displays code on screen with countdown timer
+  │
+Device B (redeemer) — AppHomePage → LinkDevice
+  │
+  ├─ [2] Click "Join existing account" → enter 6-digit code
+  │       → POST account-link-finish (with Bearer token + { code })
+  │       → Hashes submitted code
+  │       → Finds matching unexpired, unredeemed code row
+  │       → Reassigns redeemer's entries to issuer's account
+  │       → Moves redeemer's account_users row to issuer's account
+  │       → Deletes redeemer's old (now empty) account
+  │       → Marks code as redeemed
+  │       ← Returns { success: true }
+  │
+  └─ Both devices now share the same account, handle, and entries
 ```
 
 ---
@@ -294,27 +342,31 @@ EntriesPage
 │   EntriesPage                           │
 ├─────────────────────────────────────────┤
 │           Components (presentation)      │
-│   RecordButton, Timer, TranscriptView,  │
-│   EntriesList, EntryEditor              │
+│   LinkDevice, RecordButton, Timer,      │
+│   TranscriptView, EntriesList,          │
+│   EntryEditor                           │
 ├─────────────────────────────────────────┤
 │         Hooks (orchestration)            │
 │   useAuth, useEntries, useHomeRecorder, │
-│   useMyProfile, useSpeechRecognition    │
+│   useMyAccount, useSpeechRecognition    │
 ├─────────────────────────────────────────┤
 │          Data (API / infrastructure)     │
-│   entries.api, profiles.api,            │
-│   webauthnAuthRepository, supabaseClient│
+│   accounts.api, accountLink.api,        │
+│   entries.api, webauthnAuthRepository,  │
+│   supabaseClient                        │
 ├─────────────────────────────────────────┤
 │      Types & Utils (domain / pure)       │
-│   entry.ts, profile.ts, time.ts,        │
+│   account.ts, entry.ts, time.ts,        │
 │   title.ts                              │
 ├─────────────────────────────────────────┤
 │       Supabase Edge Functions (Deno)     │
-│   WebAuthn ceremonies, JWT minting,     │
-│   user creation, credential storage     │
+│   WebAuthn ceremonies, account creation,│
+│   account linking, JWT minting          │
 ├─────────────────────────────────────────┤
 │           Supabase (PostgreSQL)          │
-│   entries, profiles, webauthn_challenges,│
+│   accounts, account_users, entries,     │
+│   account_link_codes,                   │
+│   webauthn_challenges,                  │
 │   webauthn_credentials, auth.users      │
 └─────────────────────────────────────────┘
 ```
@@ -335,7 +387,7 @@ type Result<T> = { data: T; error: null } | { data: null; error: Error };
 - **Hooks:** check `error` field, set status/errorMessage state
 - **Components/Pages:** render error messages or notices to the user
 - **Edge functions:** return HTTP error responses; client maps them to Result errors
-- **WebAuthn errors:** DOMException names mapped to user-friendly messages
+- **WebAuthn errors:** DOMException names mapped to user-friendly messages; AbortController cancels stale ceremonies
 - **Speech errors:** browser error codes mapped to readable messages
 
 ---
@@ -360,3 +412,15 @@ type Result<T> = { data: T; error: null } | { data: null; error: Error };
 | `WEBAUTHN_RP_NAME` | Relying Party display name |
 | `WEBAUTHN_ORIGIN` | Allowed origin for WebAuthn |
 | `WEBAUTHN_ORIGINS` | (Optional) Comma-separated allowed origins |
+
+---
+
+## npm Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `dev` | Runs Vite dev server + Cloudflare tunnel in parallel |
+| `dev:local` | Runs Vite dev server only (no tunnel) |
+| `build` | Type-check + Vite production build |
+| `preview` | Preview production build |
+| `deploy:functions` | Deploys all 6 edge functions to Supabase |
