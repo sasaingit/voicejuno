@@ -3,7 +3,7 @@ import type { Entry, EntryCreate, EntryPatch } from '../types/entry';
 
 export type Result<T> = { data: T; error: null } | { data: null; error: Error };
 
-const ENTRY_COLUMNS = 'id,user_id,title,transcript,recorded_at,created_at,updated_at' as const;
+const ENTRY_COLUMNS = 'id,account_id,created_by_user_id,title,transcript,recorded_at,created_at,updated_at' as const;
 
 const ERROR_MESSAGES = Object.freeze({
   invalidId: 'Invalid entry id.',

@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite & cloudflared tunnel run voicejuno & wait",
+    "dev:local": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:functions": "supabase functions deploy auth-webauthn-login-finish --no-verify-jwt && supabase functions deploy auth-webauthn-login-start --no-verify-jwt && supabase functions deploy auth-webauthn-register-finish --no-verify-jwt && supabase functions deploy auth-webauthn-register-start --no-verify-jwt"
   },
   "dependencies": {
     "react": "18.3.1",

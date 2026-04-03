@@ -123,6 +123,10 @@ function mapWebauthnError(e: unknown, context: 'register' | 'login'): Error {
   return e instanceof Error ? e : new Error(ERROR_MESSAGES.network);
 }
 
+// Module-level AbortController so any active WebAuthn ceremony can be
+// canceled before starting a new one (browser allows only one at a time).
+let activeAbort: AbortController | null = null;
+
 export function useAuth(): AuthState {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -159,42 +163,51 @@ export function useAuth(): AuthState {
       throw new Error(ERROR_MESSAGES.passkeysUnsupported);
     }
 
-    // 1. start
-    const startResult = await startWebauthnRegister();
-    if (startResult.error) throw startResult.error;
-    const { options, challengeId } = startResult.data;
+    // Cancel any lingering WebAuthn ceremony before starting a new one.
+    activeAbort?.abort();
+    activeAbort = new AbortController();
+    const { signal } = activeAbort;
 
-    // Ensure binary fields are ArrayBuffers
-    const publicKey = reviveRequestOptionsForCreate(options);
-
-    // 2. create credential
-    let credential: PublicKeyCredential;
     try {
-      credential = (await navigator.credentials.create({ publicKey })) as PublicKeyCredential;
-      if (!credential) throw new Error(ERROR_MESSAGES.canceled);
-    } catch (e) {
-      throw mapWebauthnError(e, 'register');
+      // 1. start
+      const startResult = await startWebauthnRegister();
+      if (startResult.error) throw startResult.error;
+      const { options, challengeId } = startResult.data;
+
+      // Ensure binary fields are ArrayBuffers
+      const publicKey = reviveRequestOptionsForCreate(options);
+
+      // 2. create credential
+      let credential: PublicKeyCredential;
+      try {
+        credential = (await navigator.credentials.create({ publicKey, signal })) as PublicKeyCredential;
+        if (!credential) throw new Error(ERROR_MESSAGES.canceled);
+      } catch (e) {
+        throw mapWebauthnError(e, 'register');
+      }
+
+      // 3. finish
+      const attestation = (credential as unknown as { toJSON: () => unknown }).toJSON();
+      const finishResult = await finishWebauthnRegister({ credential: attestation, challengeId });
+      if (finishResult.error) throw finishResult.error;
+      const finishJson: FinishResponse = finishResult.data;
+
+      // 4. set Supabase session
+      const tokensResult = getTokensOrError(finishJson);
+      if (tokensResult.error) {
+        throw new Error(ERROR_MESSAGES.registrationTokensMissing);
+      }
+
+      const { data, error } = await supabase.auth.setSession({
+        access_token: tokensResult.data.access_token,
+        refresh_token: tokensResult.data.refresh_token,
+      });
+      if (error) throw new Error(error.message || 'Network error — please try again.');
+      setSession(data.session);
+      setUser(data.session?.user ?? null);
+    } finally {
+      activeAbort = null;
     }
-
-    // 3. finish
-    const attestation = (credential as unknown as { toJSON: () => unknown }).toJSON();
-    const finishResult = await finishWebauthnRegister({ credential: attestation, challengeId });
-    if (finishResult.error) throw finishResult.error;
-    const finishJson: FinishResponse = finishResult.data;
-
-    // 4. set Supabase session (Option A: tokens must be returned)
-    const tokensResult = getTokensOrError(finishJson);
-    if (tokensResult.error) {
-      throw new Error(ERROR_MESSAGES.registrationTokensMissing);
-    }
-
-    const { data, error } = await supabase.auth.setSession({
-      access_token: tokensResult.data.access_token,
-      refresh_token: tokensResult.data.refresh_token,
-    });
-    if (error) throw new Error(error.message || 'Network error — please try again.');
-    setSession(data.session);
-    setUser(data.session?.user ?? null);
   }, []);
 
   const signInWithPasskey = useCallback(async () => {
@@ -202,40 +215,49 @@ export function useAuth(): AuthState {
       throw new Error(ERROR_MESSAGES.passkeysUnsupported);
     }
 
-    // 1. start
-    const startResult = await startWebauthnLogin();
-    if (startResult.error) throw startResult.error;
-    const { options, challengeId } = startResult.data;
+    // Cancel any lingering WebAuthn ceremony before starting a new one.
+    activeAbort?.abort();
+    activeAbort = new AbortController();
+    const { signal } = activeAbort;
 
-    // 2. get assertion
-    const publicKey = reviveRequestOptionsForGet(options);
-    let assertion: PublicKeyCredential;
     try {
-      assertion = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential;
-      if (!assertion) throw new Error(ERROR_MESSAGES.canceled);
-    } catch (e) {
-      throw mapWebauthnError(e, 'login');
+      // 1. start
+      const startResult = await startWebauthnLogin();
+      if (startResult.error) throw startResult.error;
+      const { options, challengeId } = startResult.data;
+
+      // 2. get assertion
+      const publicKey = reviveRequestOptionsForGet(options);
+      let assertion: PublicKeyCredential;
+      try {
+        assertion = (await navigator.credentials.get({ publicKey, signal })) as PublicKeyCredential;
+        if (!assertion) throw new Error(ERROR_MESSAGES.canceled);
+      } catch (e) {
+        throw mapWebauthnError(e, 'login');
+      }
+
+      // 3. finish
+      const assertionJSON = (assertion as unknown as { toJSON: () => unknown }).toJSON();
+      const finishResult = await finishWebauthnLogin({ credential: assertionJSON, challengeId });
+      if (finishResult.error) throw finishResult.error;
+      const finishJson: FinishResponse = finishResult.data;
+
+      // 4. set Supabase session
+      const tokensResult = getTokensOrError(finishJson);
+      if (tokensResult.error) {
+        throw new Error(ERROR_MESSAGES.loginTokensMissing);
+      }
+
+      const { data, error } = await supabase.auth.setSession({
+        access_token: tokensResult.data.access_token,
+        refresh_token: tokensResult.data.refresh_token,
+      });
+      if (error) throw new Error(error.message || 'Network error — please try again.');
+      setSession(data.session);
+      setUser(data.session?.user ?? null);
+    } finally {
+      activeAbort = null;
     }
-
-    // 3. finish
-    const assertionJSON = (assertion as unknown as { toJSON: () => unknown }).toJSON();
-    const finishResult = await finishWebauthnLogin({ credential: assertionJSON, challengeId });
-    if (finishResult.error) throw finishResult.error;
-    const finishJson: FinishResponse = finishResult.data;
-
-    // 4. set Supabase session
-    const tokensResult = getTokensOrError(finishJson);
-    if (tokensResult.error) {
-      throw new Error(ERROR_MESSAGES.loginTokensMissing);
-    }
-
-    const { data, error } = await supabase.auth.setSession({
-      access_token: tokensResult.data.access_token,
-      refresh_token: tokensResult.data.refresh_token,
-    });
-    if (error) throw new Error(error.message || 'Network error — please try again.');
-    setSession(data.session);
-    setUser(data.session?.user ?? null);
   }, []);
 
   const signOut = useCallback(async () => {

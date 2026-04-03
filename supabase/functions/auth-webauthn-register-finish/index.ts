@@ -144,6 +144,35 @@ async function handler(req: Request): Promise<Response> {
 
     const authUserId = created.user.id;
 
+    // Generate a readable handle via the DB function and create an account.
+    const { data: handleResult, error: handleError } = await supabase.rpc(
+      'generate_memorable_handle',
+    );
+    if (handleError || typeof handleResult !== 'string') {
+      console.error('Failed to generate handle:', handleError);
+      return errorResponse(500, 'Failed to create account', origin);
+    }
+
+    const { data: accountRow, error: accountError } = await supabase
+      .from('accounts')
+      .insert({ handle: handleResult })
+      .select('id')
+      .single<{ id: string }>();
+
+    if (accountError || !accountRow) {
+      console.error('Failed to create account:', accountError);
+      return errorResponse(500, 'Failed to create account', origin);
+    }
+
+    const { error: membershipError } = await supabase
+      .from('account_users')
+      .insert({ account_id: accountRow.id, user_id: authUserId });
+
+    if (membershipError) {
+      console.error('Failed to link user to account:', membershipError);
+      return errorResponse(500, 'Failed to link user to account', origin);
+    }
+
     const credentialInsert: WebauthnCredentialInsert = {
       user_id: authUserId,
       credential_id: credentialId,

@@ -5,7 +5,7 @@ import Timer from '../components/recorder/Timer';
 import TranscriptView from '../components/recorder/TranscriptView';
 import { useAuth } from '../hooks/useAuth';
 import { useCreateEntry } from '../hooks/useEntries';
-import { useMyProfile } from '../hooks/useMyProfile';
+import { useMyAccount } from '../hooks/useMyAccount';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { useHomeRecorder } from '../hooks/useHomeRecorder';
 
@@ -21,7 +21,7 @@ const ROUTES = Object.freeze({
 
 export default function AppHomePage() {
   const { user, signOut } = useAuth();
-  const profile = useMyProfile({ enabled: !!user });
+  const account = useMyAccount({ enabled: !!user });
   const speech = useSpeechRecognition();
   const createEntry = useCreateEntry();
 
@@ -56,12 +56,12 @@ export default function AppHomePage() {
       <h1>App</h1>
 
       <p className="muted" style={styles.metaText}>
-        Logged in as <code>{profile.status === 'success' ? profile.profile.handle : user?.email ?? user?.id}</code>
+        Logged in as <code>{account.status === 'success' ? account.account.handle : user?.email ?? user?.id}</code>
       </p>
 
-      {profile.status === 'error' ? (
+      {account.status === 'error' ? (
         <p className="muted" style={styles.metaText}>
-          {profile.message}
+          {account.message}
         </p>
       ) : null}
 

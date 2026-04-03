@@ -1,6 +1,7 @@
 export type Entry = {
   id: string;
-  user_id: string;
+  account_id: string;
+  created_by_user_id: string | null;
   title: string;
   transcript: string;
   recorded_at: string; // ISO

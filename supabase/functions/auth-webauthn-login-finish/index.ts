@@ -83,7 +83,7 @@ async function handler(req: Request): Promise<Response> {
       return errorResponse(400, 'Challenge expired', origin);
     }
 
-    const rawCredentialId = body.credential?.id;
+    const rawCredentialId = (body.credential as Record<string, unknown>)?.id;
     if (typeof rawCredentialId !== 'string' || rawCredentialId.length === 0) {
       return errorResponse(400, 'Missing credential id', origin);
     }

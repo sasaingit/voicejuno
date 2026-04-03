@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react';
-import { fetchMyProfile } from '../data/profiles.api';
-import type { Profile } from '../types/profile';
+import { fetchMyAccount } from '../data/accounts.api';
+import type { Account } from '../types/account';
 
-type MyProfileState =
+type MyAccountState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; profile: Profile }
+  | { status: 'success'; account: Account }
   | { status: 'error'; message: string };
 
 const ERROR_MESSAGES = Object.freeze({
-  loadFailed: 'Failed to load profile.',
+  loadFailed: 'Failed to load account.',
 });
 
-export function useMyProfile(options: { enabled: boolean }) {
-  const [state, setState] = useState<MyProfileState>({ status: 'idle' });
+export function useMyAccount(options: { enabled: boolean }) {
+  const [state, setState] = useState<MyAccountState>({ status: 'idle' });
 
   useEffect(() => {
     if (!options.enabled) {
@@ -25,7 +25,7 @@ export function useMyProfile(options: { enabled: boolean }) {
     setState({ status: 'loading' });
 
     async function run() {
-      const result = await fetchMyProfile();
+      const result = await fetchMyAccount();
       if (!active) return;
 
       if (result.error) {
@@ -33,7 +33,7 @@ export function useMyProfile(options: { enabled: boolean }) {
         return;
       }
 
-      setState({ status: 'success', profile: result.data });
+      setState({ status: 'success', account: result.data });
     }
 
     void run();

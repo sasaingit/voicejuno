@@ -1,12 +1,12 @@
 import { supabase } from './supabaseClient';
-import type { Profile } from '../types/profile';
+import type { Account } from '../types/account';
 
 export type Result<T> = { data: T; error: null } | { data: null; error: Error };
 
-const PROFILE_COLUMNS = 'id,handle' as const;
+const ACCOUNT_COLUMNS = 'id,handle' as const;
 
 const ERROR_MESSAGES = Object.freeze({
-  notFound: 'Profile not found.',
+  notFound: 'Account not found.',
   unexpected: 'Unexpected error — please try again.',
 });
 
@@ -40,10 +40,10 @@ function toReadableError(operation: string, err: unknown): Error {
   return new Error(`${operation} failed.`);
 }
 
-export async function fetchMyProfile(): Promise<Result<Profile>> {
-  const { data, error } = await supabase.from('profiles').select(PROFILE_COLUMNS).single();
+export async function fetchMyAccount(): Promise<Result<Account>> {
+  const { data, error } = await supabase.from('accounts').select(ACCOUNT_COLUMNS).single();
 
-  if (error) return { data: null, error: toReadableError('Loading profile', error) };
+  if (error) return { data: null, error: toReadableError('Loading account', error) };
   if (!data) return { data: null, error: new Error(ERROR_MESSAGES.unexpected) };
 
   return { data, error: null };
